@@ -382,6 +382,9 @@ fun CameraScreen() {
         factory = { ctx ->
             val previewView = PreviewView(ctx)
             cameraProviderFuture.addListener({
+                // TODO: ADD IMAGE ANALYSIS LOGIC HERE
+                // inside this listener ^ add an ImageAnalysis
+                // ImageProxy from ^ will give you a bitmap of curr frame
                 val cameraProvider = cameraProviderFuture.get()
                 val preview = Preview.Builder().build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
@@ -390,7 +393,8 @@ fun CameraScreen() {
                 cameraProvider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview
+                    preview,
+                    // add imageAnalysis here
                 )
             }, ContextCompat.getMainExecutor(ctx))
             previewView
