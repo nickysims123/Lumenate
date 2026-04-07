@@ -73,6 +73,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.sp
 import org.tensorflow.lite.task.vision.detector.Detection
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
@@ -277,7 +278,7 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 
         Text(
             text = "Camera access is required for the app to function.",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -286,8 +287,8 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Camera permission is required. Please grant access to continue.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
         }
@@ -296,9 +297,9 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 
         Button(
             onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().height(150.dp)
         ) {
-            Text("Allow Camera Access")
+            Text("Allow Camera Access", fontSize=(27.sp))
         }
     }
 }
@@ -307,7 +308,7 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 private const val BLURB =
     "The app will help you navigate around the objects nearby. " +
     "Every 5 seconds, it will give an accurate depiction of the closest " +
-    "object and its distance in feet or distance. If there is an object " +
+    "object and its distance in feet or meters. If there is an object " +
     "within 5 feet, you will be alerted via an emergency message."
 
 // will be changed to: speak when ready
@@ -371,9 +372,9 @@ fun BlurbScreen(onReady: () -> Unit) {
 
         Button(
             onClick = onReady,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().height(150.dp)
         ) {
-            Text("I'm Ready")
+            Text("I'm Ready", fontSize=27.sp)
         }
     }
 }
