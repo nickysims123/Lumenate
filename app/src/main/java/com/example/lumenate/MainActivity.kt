@@ -66,6 +66,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Locale
+import androidx.camera.core.ImageAnalysis
+import android.util.Size
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import org.tensorflow.lite.task.vision.detector.Detection
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
 
@@ -378,27 +386,113 @@ fun CameraScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
 
-    AndroidView(
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            cameraProviderFuture.addListener({
-                // TODO: ADD IMAGE ANALYSIS LOGIC HERE
-                // inside this listener ^ add an ImageAnalysis
-                // ImageProxy from ^ will give you a bitmap of curr frame
-                val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
+    // Hold detection results in state so you can react to them
+    var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                val previewView = PreviewView(ctx)
+                cameraProviderFuture.addListener({
+                    // TODO: ADD IMAGE ANALYSIS LOGIC HERE
+                    // inside this listener ^ add an ImageAnalysis
+                    // ImageProxy from ^ will give you a bitmap of curr frame
+                    val cameraProvider = cameraProviderFuture.get()
+                    val preview = Preview.Builder().build().also {
+                        it.setSurfaceProvider(previewView.surfaceProvider)
+                    }
+
+                    // Add ImageAnalysis
+                    val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                        .also {
+                            // Set our analyzer to the object detector class we created. And fetch its list of Detections, and the returned Image size
+                            it.setAnalyzer(
+                                ContextCompat.getMainExecutor(ctx),
+                                ObjectDetector(ctx) { results, size ->
+                                    detectedObjects = results
+                                    imageSize = size
+                                }
+                            )
+                        }
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        imageAnalysis
+                    )
+                }, ContextCompat.getMainExecutor(ctx))
+                previewView
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Detection Results Overlay
+        BoundingBoxOverlay(
+            detectedObjects = detectedObjects,
+            imageSize = imageSize,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+@Composable
+fun BoundingBoxOverlay(
+    detectedObjects: List<Detection>,
+    imageSize: Size,
+    modifier: Modifier = Modifier
+) {
+    val colors = listOf(Color.Red, Color.Cyan, Color.Yellow, Color.Green, Color.Magenta)
+
+    Canvas(modifier = modifier) {
+        // scaleX/scaleY calculation stretches the box coordinates to match exactly what the preview is showing.
+        // Otherwise the bounding box returned is just the
+        // The rotation swap in the analyzer handles the fact that the back camera sensor is landscape-native but you're holding the phone in portrait
+        val scaleX = size.width  / imageSize.width.toFloat()
+        val scaleY = size.height / imageSize.height.toFloat()
+
+
+       for ((index, detection) in detectedObjects.withIndex()) {
+            val label = detection.categories.maxByOrNull { it.score }
+            // If whatever's detected could not be properly or confidently labeled, skip to avoid clutter or misinformation to user
+            if (label == null) {
+                continue
+            }
+            val box = detection.boundingBox
+            val color = colors[index % colors.size]
+
+            // Scale bounding box from image coords to match image coords
+            // FOR LATER UPDATE: What if the camera/image size does not match the actual screen size. This seems to be a bug, where bounding boxes are slightly off
+            // Not a huge deal right now. Afterall our user's will not really be using the screen. But still...
+            // For example, objects that appear off-screen to the user, actually get captured by the camera & detector, and classified. Which is great, but we should see how DepthAPI interacts with this later. Cause we still need to give spacially salient info to the user.
+            val left   = box.left   * scaleX
+            val top    = box.top    * scaleY
+            val right  = box.right  * scaleX
+            val bottom = box.bottom * scaleY
+
+            // Draw the rectangle outline
+            drawRect(
+                color = color,
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                style = Stroke(width = 4.dp.toPx())
+            )
+
+            // Draw label above the box
+            drawContext.canvas.nativeCanvas.drawText(
+                "${label.label} ${(label.score * 100).toInt()}%",
+                left,
+                (top - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
+                android.graphics.Paint().apply {
+                    this.color = android.graphics.Color.WHITE
+                    textSize = 40f
+                    isFakeBoldText = true
+                    setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
                 }
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    // add imageAnalysis here
-                )
-            }, ContextCompat.getMainExecutor(ctx))
-            previewView
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+            )
+
+        }
+    }
 }
