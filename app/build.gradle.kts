@@ -52,6 +52,8 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation("com.google.mlkit:object-detection-custom:17.0.0")
     implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    implementation("com.google.ar:core:1.54.0")
+    implementation("io.github.sceneview:arsceneview:4.0.1")
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
