@@ -70,6 +70,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import androidx.camera.core.ImageAnalysis
 import android.util.Size
+import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
@@ -394,21 +395,33 @@ fun BlurbScreen(onReady: () -> Unit) {
 
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
-fun getRotationDegrees(activity: Activity): Int {
-    val rotation = activity.windowManager.defaultDisplay.rotation
-    val degrees = when (rotation) {
-        Surface.ROTATION_0 -> 0
-        Surface.ROTATION_90 -> 90
-        Surface.ROTATION_180 -> 180
-        Surface.ROTATION_270 -> 270
-        else -> 0
+enum class DeviceOrientation {
+   PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
+}
+
+// Orientation
+@Composable
+fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: (DeviceOrientation) -> Unit) {
+    DisposableEffect(Unit) {
+        val orientationEventListener = object : OrientationEventListener(applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                val newOrientation = when (orientation) {
+                    in 315..359, in 0..44   -> DeviceOrientation.PORTRAIT
+                    in 45..134              -> DeviceOrientation.REVERSE_LANDSCAPE
+                    in 135..224             -> DeviceOrientation.REVERSE_PORTRAIT
+                    in 225..314             -> DeviceOrientation.LANDSCAPE
+                    else                    -> return // shouldn't happen
+                }
+                onOrientationChange(newOrientation)
+            }
+        }
+        orientationEventListener.enable()
+
+        // Disable the event onDispose
+        onDispose {
+            orientationEventListener.disable()
+        }
     }
-
-    // Most back-facing sensors are rotated 90 degrees relative to the device's natural orientation
-    val sensorOrientation = 90
-
-    // Calculate the relative rotation
-    return (sensorOrientation - degrees + 360) % 360
 }
 
 @Composable
@@ -416,6 +429,8 @@ fun CameraScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+    var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT)}
+    DeviceOrientationListener(context.applicationContext) { orientation = it }
 
     // Hold detection results in state so you can react to them
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
@@ -428,65 +443,13 @@ fun CameraScreen() {
         ARSceneView(
             modifier = Modifier.fillMaxSize(),
             planeRenderer = true,
-            onSessionUpdated = { _, frame ->
-                try {
-//                    frame.acquireDepthImage16Bits().use { rawDepth ->
-//                        frame.acquireRawDepthConfidenceImage().use { rawDepthConfidence ->
-//                            val thisFrameHasNewDepthData = frame.timestamp == rawDepth.timestamp
-//                            if (thisFrameHasNewDepthData) {
-//
-//                            }
-//                        }
-//                    }
-                    val image = frame.acquireCameraImage()
-                    detector.analyze(image, 90)
-
-//                    detector.analyze(frame.acquireCameraImage(), getRotationDegrees(this as Activity))
-                } catch (e: NotYetAvailableException) {
-                    Log.d("Depth image", "Depth Image not yet available")
-                }
+            onSessionUpdated = { session, frame ->
+                val image = frame.acquireCameraImage()
+                detector.analyze(image, orientation)
             }
         )
-//        AndroidView(
-//            factory = { ctx ->
-//                val previewView = PreviewView(ctx)
-//                cameraProviderFuture.addListener({
-//                    // TODO: ADD IMAGE ANALYSIS LOGIC HERE
-//                    // inside this listener ^ add an ImageAnalysis
-//                    // ImageProxy from ^ will give you a bitmap of curr frame
-//                    val cameraProvider = cameraProviderFuture.get()
-//                    val preview = Preview.Builder().build().also {
-//                        it.setSurfaceProvider(previewView.surfaceProvider)
-//                    }
-//
-//                    // Add ImageAnalysis
-//                    val imageAnalysis = ImageAnalysis.Builder()
-//                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-//                        .build()
-//                        .also {
-//                            // Set our analyzer to the object detector class we created. And fetch its list of Detections, and the returned Image size
-//                            it.setAnalyzer(
-//                                ContextCompat.getMainExecutor(ctx),
-//                                ObjectDetector(ctx) { results, size ->
-//                                    detectedObjects = results
-//                                    imageSize = size
-//                                }
-//                            )
-//                        }
-//                    cameraProvider.unbindAll()
-//                    cameraProvider.bindToLifecycle(
-//                        lifecycleOwner,
-//                        CameraSelector.DEFAULT_BACK_CAMERA,
-//                        preview,
-//                        imageAnalysis
-//                    )
-//                }, ContextCompat.getMainExecutor(ctx))
-//                previewView
-//            },
-//            modifier = Modifier.fillMaxSize()
-//        )
-//
-//        // Detection Results Overlay
+
+        // Detection Results Overlay
         BoundingBoxOverlay(
             detectedObjects = detectedObjects,
             imageSize = imageSize,
