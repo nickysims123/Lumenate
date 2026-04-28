@@ -3,8 +3,13 @@ package com.example.lumenate
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -61,9 +66,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.lumenate.ui.theme.LumenateTheme
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -228,7 +235,13 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
             )
         }
         composable(Routes.CAMERA) {
-            CameraScreen()
+            CameraScreen(
+                onPermissionsRequired = {
+                    navController.navigate(Routes.ONBOARDING) {
+                        popUpTo(Routes.CAMERA) { inclusive = true }
+                    }
+                }
+            )
         }
     }
 }
@@ -236,41 +249,55 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
 // onboarding screen
 
 private const val ONBOARDING_TTS =
-    "Welcome to Lumenate. This app uses your camera to detect nearby objects " +
-    "and keep you aware of your surroundings. Camera access is required for " +
-    "the app to function. Please tap the Allow Camera Access button to continue."
+    "Welcome to Lumenate. This app uses your camera and microphone to detect nearby objects " +
+    "and keep you aware of your surroundings. Permission dialogs will appear now. " +
+    "Please grant both permissions to continue. " +
+    "If a permission was denied, say allow or tap the button to try again."
 
 @Composable
 fun OnboardingScreen(onPermissionGranted: () -> Unit) {
     val context = LocalContext.current
-    var permissionDenied by remember { mutableStateOf(false) }
     val tts = rememberTts()
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) onPermissionGranted()
-        else permissionDenied = true
+    var cameraGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    }
+    var audioGranted by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
 
-    // if permission granted, skip through
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        audioGranted = results[Manifest.permission.RECORD_AUDIO] == true
+        cameraGranted = results[Manifest.permission.CAMERA] == true
+        if (cameraGranted) onPermissionGranted()
+    }
+
     LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            onPermissionGranted()
-        }
+        if (cameraGranted && audioGranted) onPermissionGranted()
+        else permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
     }
 
-    // speak instructions to user
     LaunchedEffect(tts) {
         tts?.speak(ONBOARDING_TTS, TextToSpeech.QUEUE_FLUSH, null, "onboarding")
     }
 
+    // potentially could allow for permission grants, haven't tested yet
+    LaunchedEffect(audioGranted) {
+        if (!audioGranted) return@LaunchedEffect
+        continuousSpeechFlow(context).collect { transcript ->
+            if (transcript.contains("allow", ignoreCase = true) ||
+                transcript.contains("yes", ignoreCase = true) ||
+                transcript.contains("grant", ignoreCase = true)
+            ) {
+                permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA))
+            }
+        }
+    }
+
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier = Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -279,41 +306,18 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
             style = MaterialTheme.typography.headlineMedium,
             textAlign = TextAlign.Center
         )
-
         Spacer(modifier = Modifier.height(24.dp))
-
         Text(
-            text = "Lumenate uses your camera to detect nearby objects and help keep you aware of your surroundings.",
+            text = "Camera and microphone access are required. Permission dialogs will appear automatically.",
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center
         )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Camera access is required for the app to function.",
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (permissionDenied) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Camera permission is required. Please grant access to continue.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
-
         Spacer(modifier = Modifier.height(40.dp))
-
         Button(
-            onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+            onClick = { permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)) },
             modifier = Modifier.fillMaxWidth().height(150.dp)
         ) {
-            Text("Allow Camera Access", fontSize=(27.sp))
+            Text("Grant Permissions", fontSize = 27.sp)
         }
     }
 }
@@ -325,22 +329,25 @@ private const val BLURB =
     "object and its distance in feet or meters. If there is an object " +
     "within 5 feet, you will be alerted via an emergency message."
 
-// will be changed to: speak when ready
 private const val BLURB_POSITIONING =
     "To get started, hold your phone flush against your chest with the screen " +
-    "facing your clothes. When you are in position, tap the I'm Ready button."
+    "facing your clothes. When you are in position, say I'm Ready."
 
 @Composable
 fun BlurbScreen(onReady: () -> Unit) {
+    val context = LocalContext.current
     val tts = rememberTts()
     var spokenOnce by remember { mutableStateOf(false) }
 
-    // speak blurb and positioning instructions once text to speech is ready
     LaunchedEffect(tts) {
-        if (tts != null && !spokenOnce) {
-            spokenOnce = true
-            val fullText = "$BLURB $BLURB_POSITIONING"
-            tts.speak(fullText, TextToSpeech.QUEUE_FLUSH, null, "blurb")
+        if (tts == null || spokenOnce) return@LaunchedEffect
+        spokenOnce = true
+        tts.speak("$BLURB $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
+    }
+
+    LaunchedEffect(Unit) {
+        continuousSpeechFlow(context).collect { transcript ->
+            if (transcript.contains("ready", ignoreCase = true)) onReady()
         }
     }
 
@@ -393,6 +400,69 @@ fun BlurbScreen(onReady: () -> Unit) {
     }
 }
 
+// ─── Speech-to-Text ──────────────────────────────────────────────────────────
+
+private val sttIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+}
+
+// to mute the beeps from speechrecognizer
+private val beepStreams = listOf(
+    AudioManager.STREAM_NOTIFICATION,
+    AudioManager.STREAM_RING,
+    AudioManager.STREAM_SYSTEM,
+    AudioManager.STREAM_ALARM
+)
+
+// mute all speechRecognizer beeps (so annoying)
+private fun AudioManager.muteBeep() {
+    beepStreams.forEach { runCatching { adjustStreamVolume(it, AudioManager.ADJUST_MUTE, 0) } }
+}
+
+// unmute system sounds after app closure
+private fun AudioManager.unmuteBeep() {
+    beepStreams.forEach { runCatching { adjustStreamVolume(it, AudioManager.ADJUST_UNMUTE, 0) } }
+}
+
+private fun continuousSpeechFlow(context: Context): Flow<String> = callbackFlow {
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    if (!SpeechRecognizer.isRecognitionAvailable(context)) { close(); return@callbackFlow }
+    val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+
+    fun restart() {
+        audioManager.muteBeep()
+        recognizer.startListening(sttIntent)
+    }
+
+    recognizer.setRecognitionListener(object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+        override fun onResults(results: Bundle?) {
+            val transcript = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
+            if (transcript.isNotBlank()) trySend(transcript)
+            restart()
+        }
+        override fun onError(error: Int) {
+            restart()
+        }
+    })
+
+    restart()
+
+    awaitClose {
+        audioManager.unmuteBeep()
+        recognizer.stopListening()
+        recognizer.destroy()
+    }
+}
+
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
 enum class DeviceOrientation {
@@ -425,7 +495,7 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 }
 
 @Composable
-fun CameraScreen() {
+fun CameraScreen(onPermissionsRequired: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
