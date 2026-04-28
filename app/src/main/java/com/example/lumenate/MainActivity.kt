@@ -88,6 +88,7 @@ import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -112,6 +113,7 @@ import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoader
 import java.io.ByteArrayOutputStream
 import java.util.EnumSet
+import kotlin.collections.get
 import kotlin.collections.map
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
@@ -553,17 +555,27 @@ fun getDepthForDetections(
 //        Log.d("Depth", "cx=$cx cy=$cy index=${cy * depthRowStride + cx * depthPixelStride} depthMm=$depthMm result=${depthMm / 1000f}")
         return depthMm / 1000f
     }
+   // Log.d("Depth", "pixelStride bytes: ${depthImage.planes[0].pixelStride}")
+   // Log.d("Depth", "depth image: ${depthImage.width} x ${depthImage.height}")
+   // Log.d("Depth", "imageSize: $imageSize")
 
     return detections.map { detection ->
         val box = detection.boundingBox
-        val depthX = (((box.left + box.right) / 2f) / imageSize.width * depthImage.width).toInt()
-        val depthY = (((box.top + box.bottom) / 2f) / imageSize.height * depthImage.height).toInt()
+        val centerX = (box.left + box.right) / 2f
+        val centerY = (box.top + box.bottom) / 2f
+
+        // Portrait (480x640) → Landscape depth image (160x90)
+        // 90° rotation: portrait's Y axis becomes depth's X axis,
+        //               portrait's X axis (flipped) becomes depth's Y axis
+        val depthX = (centerY / imageSize.height * depthImage.width).toInt()
+        val depthY = ((imageSize.width - centerX) / imageSize.width * depthImage.height).toInt()
 
         val depth = sampleDepth(depthX, depthY)
             ?: sampleDepth(depthX + 5, depthY)
             ?: sampleDepth(depthX - 5, depthY)
             ?: sampleDepth(depthX, depthY + 5)
             ?: sampleDepth(depthX, depthY - 5)
+        //Log.d("DepthSample", "label=${detection.categories.maxByOrNull { it.score }?.label} " + "centerX=$centerX centerY=$centerY → depthX=$depthX depthY=$depthY depth=$depth")
 
         detection to depth
     }
@@ -665,12 +677,32 @@ fun CameraScreen(
         }
     }
 
-    // notification loop - speaks top 3 closest objects; 5-second gap starts after speech ends
+    // notification loop - speaks all detected objects & if they have a corresponding distance; 5-second gap starts after speech ends
     LaunchedEffect(tts) {
         if (tts == null) return@LaunchedEffect
         while (true) {
-            // TODO: build announcement string from detectedObjects
-            val announcement = "placeholder"
+            val announcement = if (detectedObjectsDistances.isEmpty()) {
+                "No objects detected."
+            } else {
+                detectedObjectsDistances
+                    .take(5)
+                    .joinToString(separator = ". ") { (detection, distance) ->
+                        val label = detection.categories
+                            .maxByOrNull { it.score }
+                            ?.label
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "unknown object"
+
+                        val distanceText = if (distance != null) {
+                            "%.1f meters away".format(distance)
+                        } else {
+                            "unknown distance"
+                        }
+
+                        "$label, $distanceText"
+                    }
+
+            }
 
             tts.speakAndAwait(announcement, "objects")
             kotlinx.coroutines.delay(5_000)
