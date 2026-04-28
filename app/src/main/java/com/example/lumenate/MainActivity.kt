@@ -4,6 +4,12 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.media.Image
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
@@ -73,12 +79,18 @@ import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.sp
 import com.google.ar.core.Anchor
+import com.google.ar.core.CameraConfig
+import com.google.ar.core.CameraConfigFilter
+import com.google.ar.core.Config
+import com.google.ar.core.Frame
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.arcore.getUpdatedPlanes
@@ -89,6 +101,9 @@ import io.github.sceneview.ar.node.AnchorNode
 import io.github.sceneview.ar.rememberARCameraNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelLoader
+import java.io.ByteArrayOutputStream
+import java.util.EnumSet
+import kotlin.collections.map
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
 
@@ -399,7 +414,7 @@ enum class DeviceOrientation {
    PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
 }
 
-// Orientation
+// Orientation Listener for passing in images to the object detection model
 @Composable
 fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: (DeviceOrientation) -> Unit) {
     DisposableEffect(Unit) {
@@ -417,13 +432,115 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
         }
         orientationEventListener.enable()
 
-        // Disable the event onDispose
         onDispose {
             orientationEventListener.disable()
         }
     }
 }
 
+
+// Somewhat inaccurate depth measurement method, will be refined later on
+fun getDepthForDetections(
+    depthImage: Image,
+    confidenceImage: Image,
+    detections: List<Detection>,
+    imageSize: Size
+): List<Pair<Detection, Float?>> {
+    val depthBuffer = depthImage.planes[0].buffer.asShortBuffer()
+    val confidenceBuffer = confidenceImage.planes[0].buffer
+    val depthRowStride = depthImage.planes[0].rowStride / 2
+    val depthPixelStride = depthImage.planes[0].pixelStride / 2
+    val confidenceRowStride = confidenceImage.planes[0].rowStride
+//    Log.d("Depth", "depth image: ${depthImage.width} x ${depthImage.height}")
+//    Log.d("Depth", "rowStride bytes: ${depthImage.planes[0].rowStride}")
+//    Log.d("Depth", "pixelStride bytes: ${depthImage.planes[0].pixelStride}")
+//    Log.d("Depth", "depthRowStride (shorts): $depthRowStride")
+//    Log.d("Depth", "depthPixelStride (shorts): $depthPixelStride")
+
+    fun sampleDepth(x: Int, y: Int): Float? {
+        val cx = x.coerceIn(0, depthImage.width - 1)
+        val cy = y.coerceIn(0, depthImage.height - 1)
+        val confidence = confidenceBuffer.get(cy * confidenceRowStride + cx).toInt() and 0xFF
+        if (confidence == 0) return null
+        val depthMm = depthBuffer.get(cy * depthRowStride + cx * depthPixelStride).toInt() and 0xFFFF
+//        Log.d("Depth", "cx=$cx cy=$cy index=${cy * depthRowStride + cx * depthPixelStride} depthMm=$depthMm result=${depthMm / 1000f}")
+        return depthMm / 1000f
+    }
+
+    return detections.map { detection ->
+        val box = detection.boundingBox
+        val depthX = (((box.left + box.right) / 2f) / imageSize.width * depthImage.width).toInt()
+        val depthY = (((box.top + box.bottom) / 2f) / imageSize.height * depthImage.height).toInt()
+
+        val depth = sampleDepth(depthX, depthY)
+            ?: sampleDepth(depthX + 5, depthY)
+            ?: sampleDepth(depthX - 5, depthY)
+            ?: sampleDepth(depthX, depthY + 5)
+            ?: sampleDepth(depthX, depthY - 5)
+
+        detection to depth
+    }
+}
+
+// Debug toBitmap methods for viewing bitmaps as there is no native conversion method from Image to Bitmap
+//fun Image.toBitmap(): Bitmap {
+//    val yBuffer = planes[0].buffer
+//    val uBuffer = planes[1].buffer
+//    val vBuffer = planes[2].buffer
+//
+//    val ySize = yBuffer.remaining()
+//    val uSize = uBuffer.remaining()
+//    val vSize = vBuffer.remaining()
+//
+//    val nv21 = ByteArray(ySize + uSize + vSize)
+//    yBuffer.get(nv21, 0, ySize)
+//    vBuffer.get(nv21, ySize, vSize)
+//    uBuffer.get(nv21, ySize + vSize, uSize)
+//
+//    val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+//    val out = ByteArrayOutputStream()
+//    yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+//    val jpegBytes = out.toByteArray()
+//    return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+//}
+
+//fun Image.toDepthBitmap(): Bitmap {
+//    val buffer = planes[0].buffer.asShortBuffer()
+//    val rowStride = planes[0].rowStride / 2
+//    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+//    for (y in 0 until height) {
+//        for (x in 0 until width) {
+//            val depthMm = buffer.get(y * rowStride + x).toInt() and 0xFFFF
+//            if (depthMm == 0) {
+//                bitmap.setPixel(x, y, android.graphics.Color.BLACK)
+//                continue
+//            }
+//            // normalize 0-8000mm to 0.0-1.0
+//            val normalized = (depthMm / 8000f).coerceIn(0f, 1f)
+//            // heatmap: close = red, mid = green, far = blue
+//            val r = ((1f - normalized) * 255).toInt().coerceIn(0, 255)
+//            val g = ((1f - Math.abs(normalized - 0.5f) * 2f) * 255).toInt().coerceIn(0, 255)
+//            val b = (normalized * 255).toInt().coerceIn(0, 255)
+//            bitmap.setPixel(x, y, android.graphics.Color.rgb(r, g, b))
+//        }
+//    }
+//    return bitmap
+//}
+
+//fun Image.toConfidenceBitmap(): Bitmap {
+//    val buffer = planes[0].buffer
+//    val rowStride = planes[0].rowStride
+//    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+//    for (y in 0 until height) {
+//        for (x in 0 until width) {
+//            val confidence = buffer.get(y * rowStride + x).toInt() and 0xFF
+//            bitmap.setPixel(x, y, android.graphics.Color.rgb(confidence, confidence, confidence))
+//        }
+//    }
+//    return bitmap
+//}
+
+// Due to how the depth API works, if your phone doesn't have a ToF sensor, it relies on motion to find the depth, which means that sometimes it takes like 15 seconds of moving the camera around to find an accurate depthmap
 @Composable
 fun CameraScreen() {
     val context = LocalContext.current
@@ -431,21 +548,47 @@ fun CameraScreen() {
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT)}
     DeviceOrientationListener(context.applicationContext) { orientation = it }
+//    debug images for viewing
+//    var debugDepthBitmap by remember { mutableStateOf<Bitmap?>(null) }
+//    var debugCameraBitmap by remember { mutableStateOf<Bitmap?>(null) }
+//    var debugConfidenceBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     // Hold detection results in state so you can react to them
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
+    var detectedObjectsDistances by remember {mutableStateOf<List<Pair<Detection, Float?>>>(emptyList())}
     val detector = ObjectDetector(context) { results, size ->
                                     detectedObjects = results
                                   imageSize = size
                                 }
     Box(modifier = Modifier.fillMaxSize()) {
-        ARSceneView(
+        ARSceneView( // due to the Depth API being used, we have to switch from cameraX to ARCore's camera implementation
             modifier = Modifier.fillMaxSize(),
             planeRenderer = true,
-            onSessionUpdated = { session, frame ->
-                val image = frame.acquireCameraImage()
-                detector.analyze(image, orientation)
+            sessionConfiguration = {session, config -> if (session.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)) {
+                config.depthMode = Config.DepthMode.RAW_DEPTH_ONLY
+            } },
+            onSessionUpdated = {_, frame ->
+                try {
+                    val image = frame.acquireCameraImage()
+                    detector.analyze(image, orientation)
+                } catch (e: NotYetAvailableException) {
+                    Log.d("Camera NotYetAvailableException", "Camera not available")
+                }
+
+                try {
+                    val depthImage = frame.acquireRawDepthImage16Bits()
+                    val confidenceImage = frame.acquireRawDepthConfidenceImage()
+//                    debugDepthBitmap = depthImage.toDepthBitmap()
+                    try {
+                        detectedObjectsDistances = getDepthForDetections(depthImage, confidenceImage, detectedObjects, imageSize)
+                    } finally {
+                        depthImage.close()
+                        confidenceImage.close()
+                    }
+                } catch (e: NotYetAvailableException) {
+                    Log.d("Camera NotYetAvailableException", "Camera not available")
+                }
             }
         )
 
@@ -453,59 +596,73 @@ fun CameraScreen() {
         BoundingBoxOverlay(
             detectedObjects = detectedObjects,
             imageSize = imageSize,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            orientation = orientation,
+            detectedObjectsDistances = detectedObjectsDistances
         )
 
     }
 }
 
+// Bounding box is only accurate for both portrait modes due to ARCore always sending images according to the camera position (almost always landscape-left), so must adjust for landscape later
 @Composable
 fun BoundingBoxOverlay(
     detectedObjects: List<Detection>,
+    detectedObjectsDistances: List<Pair<Detection, Float?>>,
     imageSize: Size,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    orientation: DeviceOrientation
 ) {
     val colors = listOf(Color.Red, Color.Cyan, Color.Yellow, Color.Green, Color.Magenta)
-
     Canvas(modifier = modifier) {
-        // scaleX/scaleY calculation stretches the box coordinates to match exactly what the preview is showing.
-        // Otherwise the bounding box returned is just the
-        // The rotation swap in the analyzer handles the fact that the back camera sensor is landscape-native but you're holding the phone in portrait
-        val scaleX = size.width  / imageSize.width.toFloat()
+        val scaleX = size.width / imageSize.width.toFloat()
         val scaleY = size.height / imageSize.height.toFloat()
 
-
-       for ((index, detection) in detectedObjects.withIndex()) {
-            val label = detection.categories.maxByOrNull { it.score }
-            // If whatever's detected could not be properly or confidently labeled, skip to avoid clutter or misinformation to user
-            if (label == null) {
-                continue
-            }
+        for ((index, detection) in detectedObjects.withIndex()) {
+            val label = detection.categories.maxByOrNull { it.score } ?: continue
             val box = detection.boundingBox
             val color = colors[index % colors.size]
 
-            // Scale bounding box from image coords to match image coords
-            // FOR LATER UPDATE: What if the camera/image size does not match the actual screen size. This seems to be a bug, where bounding boxes are slightly off
-            // Not a huge deal right now. Afterall our user's will not really be using the screen. But still...
-            // For example, objects that appear off-screen to the user, actually get captured by the camera & detector, and classified. Which is great, but we should see how DepthAPI interacts with this later. Cause we still need to give spacially salient info to the user.
             val left   = box.left   * scaleX
             val top    = box.top    * scaleY
             val right  = box.right  * scaleX
             val bottom = box.bottom * scaleY
 
-            // Draw the rectangle outline
+            // Flip coordinates based on orientation
+            val (adjLeft, adjTop, adjRight, adjBottom) = when (orientation) {
+                DeviceOrientation.PORTRAIT -> listOf(left, top, right, bottom)
+                DeviceOrientation.REVERSE_PORTRAIT -> listOf(
+                    size.width - right,
+                    size.height - bottom,
+                    size.width - left,
+                    size.height - top
+                )
+                DeviceOrientation.LANDSCAPE -> listOf(
+                    size.width - right,
+                    top,
+                    size.width - left,
+                    bottom
+                )
+                DeviceOrientation.REVERSE_LANDSCAPE -> listOf(
+                    left,
+                    size.height - bottom,
+                    right,
+                    size.height - top
+                )
+            }
+
+            val distance = detectedObjectsDistances.getOrNull(index)?.second
             drawRect(
                 color = color,
-                topLeft = Offset(left, top),
-                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                topLeft = Offset(adjLeft, adjTop),
+                size = androidx.compose.ui.geometry.Size(adjRight - adjLeft, adjBottom - adjTop),
                 style = Stroke(width = 4.dp.toPx())
             )
 
-            // Draw label above the box
             drawContext.canvas.nativeCanvas.drawText(
-                "${label.label} ${(label.score * 100).toInt()}%",
-                left,
-                (top - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
+                "${label.label} ${(label.score * 100).toInt()}%}, $distance",
+                adjLeft,
+                (adjTop - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
                 android.graphics.Paint().apply {
                     this.color = android.graphics.Color.WHITE
                     textSize = 40f
@@ -513,7 +670,6 @@ fun BoundingBoxOverlay(
                     setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
                 }
             )
-
         }
     }
 }

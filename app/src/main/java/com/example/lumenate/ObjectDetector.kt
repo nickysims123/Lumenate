@@ -22,6 +22,8 @@ import android.view.WindowManager
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.ops.Rot90Op
 
+// THIS NO LONGER USES THE CAMERAX API, MEANING THAT WE HAVE TO BUILD THE BITMAP OURSELVES
+
 // Constructor:
 // 1. Context to access assets to grab pretrained model
 // 2. Callback to a list of type Detection (Tflite object) and Size (the size of the image captured by our Camera)
@@ -80,6 +82,7 @@ class ObjectDetector(
         return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
     }
 
+
     fun analyze(image: Image, orientation: DeviceOrientation) {
         val now = System.currentTimeMillis()
 
@@ -103,10 +106,10 @@ class ObjectDetector(
             .build()
 
         val tensorImage = imageProcessor.process(TensorImage.fromBitmap(image.toBitmap()))
-        val result = tensorImage.bitmap
         val results = detector.detect(tensorImage)
 
         onResults(results, Size(tensorImage.width, tensorImage.height))
         image.close()
+
     }
 }
