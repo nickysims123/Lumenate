@@ -1,6 +1,7 @@
 package com.example.lumenate
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -75,13 +77,25 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import androidx.camera.core.ImageAnalysis
 import android.util.Size
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.sp
+import com.google.ar.core.Anchor
+import com.google.ar.core.exceptions.NotYetAvailableException
+import io.github.sceneview.ar.ARSceneView
+import io.github.sceneview.ar.arcore.getUpdatedPlanes
 import org.tensorflow.lite.task.vision.detector.Detection
+
+import io.github.sceneview.ar.ARScene
+import io.github.sceneview.ar.node.AnchorNode
+import io.github.sceneview.ar.rememberARCameraNode
+import io.github.sceneview.rememberEngine
+import io.github.sceneview.rememberModelLoader
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
 
@@ -451,67 +465,58 @@ private fun continuousSpeechFlow(context: Context): Flow<String> = callbackFlow 
 
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
+enum class DeviceOrientation {
+   PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
+}
+
+// Orientation
+@Composable
+fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: (DeviceOrientation) -> Unit) {
+    DisposableEffect(Unit) {
+        val orientationEventListener = object : OrientationEventListener(applicationContext) {
+            override fun onOrientationChanged(orientation: Int) {
+                val newOrientation = when (orientation) {
+                    in 315..359, in 0..44   -> DeviceOrientation.PORTRAIT
+                    in 45..134              -> DeviceOrientation.REVERSE_LANDSCAPE
+                    in 135..224             -> DeviceOrientation.REVERSE_PORTRAIT
+                    in 225..314             -> DeviceOrientation.LANDSCAPE
+                    else                    -> return // shouldn't happen
+                }
+                onOrientationChange(newOrientation)
+            }
+        }
+        orientationEventListener.enable()
+
+        // Disable the event onDispose
+        onDispose {
+            orientationEventListener.disable()
+        }
+    }
+}
+
 @Composable
 fun CameraScreen(onPermissionsRequired: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+    var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT)}
+    DeviceOrientationListener(context.applicationContext) { orientation = it }
 
     // Hold detection results in state so you can react to them
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
-
-    val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    val audioGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-    // grant access to "help" keyword, will add for final project
-    LaunchedEffect(Unit) {
-        if (!cameraGranted || !audioGranted) { onPermissionsRequired(); return@LaunchedEffect }
-        continuousSpeechFlow(context).collect { transcript ->
-            when {
-                transcript.contains("help", ignoreCase = true) -> { /* TODO: help mode */ }
-            }
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { ctx ->
-                val previewView = PreviewView(ctx)
-                cameraProviderFuture.addListener({
-                    // TODO: ADD IMAGE ANALYSIS LOGIC HERE
-                    // inside this listener ^ add an ImageAnalysis
-                    // ImageProxy from ^ will give you a bitmap of curr frame
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-
-                    // Add ImageAnalysis
-                    val imageAnalysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                        .also {
-                            // Set our analyzer to the object detector class we created. And fetch its list of Detections, and the returned Image size
-                            it.setAnalyzer(
-                                ContextCompat.getMainExecutor(ctx),
-                                ObjectDetector(ctx) { results, size ->
+    val detector = ObjectDetector(context) { results, size ->
                                     detectedObjects = results
-                                    imageSize = size
+                                  imageSize = size
                                 }
-                            )
-                        }
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis
-                    )
-                }, ContextCompat.getMainExecutor(ctx))
-                previewView
-            },
-            modifier = Modifier.fillMaxSize()
+    Box(modifier = Modifier.fillMaxSize()) {
+        ARSceneView(
+            modifier = Modifier.fillMaxSize(),
+            planeRenderer = true,
+            onSessionUpdated = { session, frame ->
+                val image = frame.acquireCameraImage()
+                detector.analyze(image, orientation)
+            }
         )
 
         // Detection Results Overlay

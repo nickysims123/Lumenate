@@ -1,6 +1,13 @@
 package com.example.lumenate
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
+import android.media.Image
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
@@ -8,7 +15,12 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.task.vision.detector.Detection
+import java.io.ByteArrayOutputStream
 import org.tensorflow.lite.task.vision.detector.ObjectDetector as TFObjectDetector
+import android.view.Surface
+import android.view.WindowManager
+import org.tensorflow.lite.support.image.ImageProcessor
+import org.tensorflow.lite.support.image.ops.Rot90Op
 
 // Constructor:
 // 1. Context to access assets to grab pretrained model
@@ -31,8 +43,8 @@ category.displayName — alternative display name if the model metadata provides
  */
 class ObjectDetector(
     context: Context,
-    private val onResults: (List<Detection>, Size) -> Unit
-) : ImageAnalysis.Analyzer {
+    private val onResults: (List<Detection>, Size) -> Unit,
+) {
     // Initialize the detector, it's model, & all options
     private val detector = TFObjectDetector.createFromFileAndOptions(
         context,
@@ -46,35 +58,55 @@ class ObjectDetector(
     // TODO: In future updates, perhaps we pause detection and allow user to give voice feedback to select an object and navigate to it
     private var lastAnalyzedTime = 0L
     private val intervalMs = 5000L
-    @OptIn(ExperimentalGetImage::class)
-    override fun analyze(imageProxy: ImageProxy) {
+
+    fun Image.toBitmap(): Bitmap {
+        val yBuffer = planes[0].buffer
+        val uBuffer = planes[1].buffer
+        val vBuffer = planes[2].buffer
+
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yBuffer.get(nv21, 0, ySize)
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
+        val jpegBytes = out.toByteArray()
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+    }
+
+    fun analyze(image: Image, orientation: DeviceOrientation) {
         val now = System.currentTimeMillis()
 
+        val numRotations = when (orientation) {
+            DeviceOrientation.PORTRAIT          -> 3
+            DeviceOrientation.LANDSCAPE         -> 0
+            DeviceOrientation.REVERSE_PORTRAIT  -> 1
+            DeviceOrientation.REVERSE_LANDSCAPE -> 2
+        }
+
         // Skip frame if not enough time has passed
-        if (now - lastAnalyzedTime < intervalMs) {
-            imageProxy.close()
+        val timeNotEnough = (now - lastAnalyzedTime) < intervalMs
+        if (timeNotEnough) {
+            image.close()
             return
         }
         lastAnalyzedTime = now
-        val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
 
-        // Convert ImageProxy to Bitmap for TFLite Task Library
-        val bitmap = imageProxy.toBitmap()
+        val imageProcessor = ImageProcessor.Builder()
+            .add(Rot90Op(numRotations))
+            .build()
 
-        // Setting size of overall image captured by user camera so we know how to draw bounding boxes later
-        val isRotated = imageProxy.imageInfo.rotationDegrees == 90
-                || imageProxy.imageInfo.rotationDegrees == 270
-        val imageSize = if (isRotated) {
-            Size(imageProxy.height, imageProxy.width)
-        } else {
-            Size(imageProxy.width, imageProxy.height)
-        }
-
-        // Convert Bitmap to TensorImage for TFLite Task Library. Then detect object(s)
-        val tensorImage = TensorImage.fromBitmap(bitmap)
+        val tensorImage = imageProcessor.process(TensorImage.fromBitmap(image.toBitmap()))
+        val result = tensorImage.bitmap
         val results = detector.detect(tensorImage)
 
-        onResults(results, imageSize)
-        imageProxy.close()
+        onResults(results, Size(tensorImage.width, tensorImage.height))
+        image.close()
     }
 }
