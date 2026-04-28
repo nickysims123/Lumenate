@@ -11,7 +11,9 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -465,6 +467,19 @@ private fun continuousSpeechFlow(context: Context): Flow<String> = callbackFlow 
 
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
+// Suspends until TTS finishes speaking so the 5-second gap starts after speech ends.
+private suspend fun TextToSpeech.speakAndAwait(text: String, id: String) =
+    suspendCancellableCoroutine<Unit> { cont ->
+        setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(u: String?) {}
+            override fun onDone(u: String?) { if (cont.isActive) cont.resume(Unit) {} }
+            override fun onError(u: String?) { if (cont.isActive) cont.resume(Unit) {} }
+            override fun onStop(u: String?, interrupted: Boolean) { if (cont.isActive) cont.resume(Unit) {} }
+        })
+        speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+        cont.invokeOnCancellation { stop() }
+    }
+
 enum class DeviceOrientation {
    PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
 }
@@ -495,20 +510,49 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 }
 
 @Composable
-fun CameraScreen(onPermissionsRequired: () -> Unit) {
+fun CameraScreen(
+    onPermissionsRequired: () -> Unit,
+    onHelpRequested: () -> Unit = {}  // TODO: wire to help screen in AppNav
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT)}
+    val tts = rememberTts()
+    var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT) }
     DeviceOrientationListener(context.applicationContext) { orientation = it }
 
-    // Hold detection results in state so you can react to them
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
-    var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
+    var imageSize by remember { mutableStateOf(Size(1, 1)) }
     val detector = ObjectDetector(context) { results, size ->
-                                    detectedObjects = results
-                                  imageSize = size
-                                }
+        detectedObjects = results
+        imageSize = size
+    }
+
+    val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    val audioGranted  = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    // STT - always listening for "help" - will nav to help screen later for preference updates
+    LaunchedEffect(Unit) {
+        if (!cameraGranted || !audioGranted) { onPermissionsRequired(); return@LaunchedEffect }
+        continuousSpeechFlow(context).collect { transcript ->
+            when {
+                transcript.contains("help", ignoreCase = true) -> onHelpRequested()
+            }
+        }
+    }
+
+    // notification loop - speaks top 3 closest objects; 5-second gap starts after speech ends
+    LaunchedEffect(tts) {
+        if (tts == null) return@LaunchedEffect
+        while (true) {
+            // TODO: build announcement string from detectedObjects
+            val announcement = "placeholder"
+
+            tts.speakAndAwait(announcement, "objects")
+            kotlinx.coroutines.delay(5_000)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         ARSceneView(
             modifier = Modifier.fillMaxSize(),
