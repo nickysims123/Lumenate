@@ -7,4 +7,5 @@
 - [x] ~~Bounding boxes for each object~~
 - [x] ~~Object detection~~
 - [ ] Slider for number of objects can detect
+- [ ] Data Persistence for settings
 ### testing strategy - running app on all Android phones that we own
