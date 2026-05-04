@@ -111,6 +111,8 @@ private val KEY_UNIT_PREFERENCE = stringPreferencesKey("unit_preference")
 
 
 // app-specific preferences class
+//TODO (jimmy): change this to your settings accordingly
+// once i get the google voice api working ill change it after you
 class UserPreferencesRepository(private val context: Context) {
 
     val onboardingComplete: Flow<Boolean> = context.dataStore.data
@@ -186,6 +188,7 @@ private object Routes {
     const val ONBOARDING = "onboarding"
     const val BLURB      = "blurb"
     const val CAMERA     = "camera"
+    const val HELP       = "help"
 }
 
 // main activity
@@ -243,7 +246,22 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.ONBOARDING) {
                         popUpTo(Routes.CAMERA) { inclusive = true }
                     }
+                },
+                onHelpRequested = {
+                    navController.navigate(Routes.HELP) {
+                        popUpTo(Routes.CAMERA) { inclusive = true }
+                    }
                 }
+            )
+        }
+        composable(Routes.HELP) {
+            HelpScreen(
+                onReturnToCamera = {
+                    navController.navigate(Routes.CAMERA) {
+                        popUpTo(Routes.HELP) { inclusive = true }
+                    }
+                }
+                // TODO jimmy: add nav call back for setting screen
             )
         }
     }
@@ -404,6 +422,77 @@ fun BlurbScreen(onReady: () -> Unit) {
     }
 }
 
+// ─── Help Screen ─────────────────────────────────────────────────────────────
+// TODO (jimmy): change this blurb to match your settings accordingly
+private const val HELP_BLURB =
+    "This is the help screen. I will reread a description of the app, then give" +
+            " you some options." + BLURB +
+            "to navigate to the settings screen to change x y and z, please say settings"
+
+
+@Composable
+fun HelpScreen(
+    onReturnToCamera: () -> Unit
+) {
+    val context = LocalContext.current
+    val tts = rememberTts()
+    var spokenOnce by remember { mutableStateOf(false) }
+
+    // TTS - read the help blurb on arrival
+    LaunchedEffect(tts) {
+        if (tts == null || spokenOnce) return@LaunchedEffect
+        spokenOnce = true
+        tts.speak(HELP_BLURB, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+    }
+
+    // STT
+    LaunchedEffect(tts) {
+        if (tts == null) return@LaunchedEffect
+        continuousSpeechFlow(context).collect { transcript ->
+            when {
+                // reread the help blurb even if on help screen
+                transcript.contains("help", ignoreCase = true) ->
+                    tts.speak(HELP_BLURB, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+                // TODO (jimmy): add callback mappings for settings screen here
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Help",
+            style = MaterialTheme.typography.headlineMedium,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = HELP_BLURB,
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(40.dp))
+
+        Button(
+            onClick = onReturnToCamera,
+            modifier = Modifier.fillMaxWidth().height(150.dp)
+        ) {
+            Text("Return to Camera", fontSize = 27.sp)
+        }
+
+        // TODO (jimmy): maybe have button for settings screen here too
+    }
+}
+
 // ─── Speech-to-Text ──────────────────────────────────────────────────────────
 
 private val sttIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -521,7 +610,7 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 @Composable
 fun CameraScreen(
     onPermissionsRequired: () -> Unit,
-    onHelpRequested: () -> Unit = {}  // TODO: wire to help screen in AppNav
+    onHelpRequested: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -648,6 +737,15 @@ fun CameraScreen(
             detectedObjectsDistances = detectedObjectsDistances
         )
 
+        // dev-only: tap to jump to help screen
+        Button(
+            onClick = onHelpRequested,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(8.dp)
+        ) {
+            Text("Help", fontSize = 14.sp)
+        }
     }
 }
 
