@@ -1,17 +1,11 @@
 package com.example.lumenate
 
 import android.Manifest
-import android.app.Activity
+
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.YuvImage
-import android.media.Image
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -26,10 +20,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
+
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -88,33 +81,24 @@ import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
+
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
+
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.sp
-import com.google.ar.core.Anchor
-import com.google.ar.core.CameraConfig
-import com.google.ar.core.CameraConfigFilter
+
 import com.google.ar.core.Config
-import com.google.ar.core.Frame
+
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
-import io.github.sceneview.ar.arcore.getUpdatedPlanes
+
 import org.tensorflow.lite.task.vision.detector.Detection
 
-import io.github.sceneview.ar.ARScene
-import io.github.sceneview.ar.node.AnchorNode
-import io.github.sceneview.ar.rememberARCameraNode
-import io.github.sceneview.rememberEngine
-import io.github.sceneview.rememberModelLoader
-import java.io.ByteArrayOutputStream
-import java.util.EnumSet
-import kotlin.collections.get
-import kotlin.collections.map
+
+
+
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
 
@@ -269,9 +253,9 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
 
 private const val ONBOARDING_TTS =
     "Welcome to Lumenate. This app uses your camera and microphone to detect nearby objects " +
-    "and keep you aware of your surroundings. Permission dialogs will appear now. " +
-    "Please grant both permissions to continue. " +
-    "If a permission was denied, say allow or tap the button to try again."
+            "and keep you aware of your surroundings. Permission dialogs will appear now. " +
+            "Please grant both permissions to continue. " +
+            "If a permission was denied, say allow or tap the button to try again."
 
 @Composable
 fun OnboardingScreen(onPermissionGranted: () -> Unit) {
@@ -345,13 +329,13 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 // blurb screen
 private const val BLURB =
     "The app will help you navigate around the objects nearby. " +
-    "Every 5 seconds, it will give an accurate depiction of the closest " +
-    "object and its distance in feet or meters. If there is an object " +
-    "within 5 feet, you will be alerted via an emergency message."
+            "Every 5 seconds, it will give an accurate depiction of the closest " +
+            "object and its distance in feet or meters. If there is an object " +
+            "within 5 feet, you will be alerted via an emergency message."
 
 private const val BLURB_POSITIONING =
     "To get started, hold your phone flush against your chest with the screen " +
-    "facing your clothes. When you are in position, say I'm Ready."
+            "facing your clothes. When you are in position, say I'm Ready."
 
 @Composable
 fun BlurbScreen(onReady: () -> Unit) {
@@ -499,7 +483,7 @@ private suspend fun TextToSpeech.speakAndAwait(text: String, id: String) =
     }
 
 enum class DeviceOrientation {
-   PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
+    PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
 }
 
 // Orientation Listener for passing in images to the object detection model
@@ -528,116 +512,10 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 }
 
 
-// Somewhat inaccurate depth measurement method, will be refined later on
-fun getDepthForDetections(
-    depthImage: Image,
-    confidenceImage: Image,
-    detections: List<Detection>,
-    imageSize: Size
-): List<Pair<Detection, Float?>> {
-    val depthBuffer = depthImage.planes[0].buffer.asShortBuffer()
-    val confidenceBuffer = confidenceImage.planes[0].buffer
-    val depthRowStride = depthImage.planes[0].rowStride / 2
-    val depthPixelStride = depthImage.planes[0].pixelStride / 2
-    val confidenceRowStride = confidenceImage.planes[0].rowStride
-//    Log.d("Depth", "depth image: ${depthImage.width} x ${depthImage.height}")
-//    Log.d("Depth", "rowStride bytes: ${depthImage.planes[0].rowStride}")
-//    Log.d("Depth", "pixelStride bytes: ${depthImage.planes[0].pixelStride}")
-//    Log.d("Depth", "depthRowStride (shorts): $depthRowStride")
-//    Log.d("Depth", "depthPixelStride (shorts): $depthPixelStride")
 
-    fun sampleDepth(x: Int, y: Int): Float? {
-        val cx = x.coerceIn(0, depthImage.width - 1)
-        val cy = y.coerceIn(0, depthImage.height - 1)
-        val confidence = confidenceBuffer.get(cy * confidenceRowStride + cx).toInt() and 0xFF
-        if (confidence == 0) return null
-        val depthMm = depthBuffer.get(cy * depthRowStride + cx * depthPixelStride).toInt() and 0xFFFF
-//        Log.d("Depth", "cx=$cx cy=$cy index=${cy * depthRowStride + cx * depthPixelStride} depthMm=$depthMm result=${depthMm / 1000f}")
-        return depthMm / 1000f
-    }
-   // Log.d("Depth", "pixelStride bytes: ${depthImage.planes[0].pixelStride}")
-   // Log.d("Depth", "depth image: ${depthImage.width} x ${depthImage.height}")
-   // Log.d("Depth", "imageSize: $imageSize")
 
-    return detections.map { detection ->
-        val box = detection.boundingBox
-        val centerX = (box.left + box.right) / 2f
-        val centerY = (box.top + box.bottom) / 2f
 
-        // Portrait (480x640) → Landscape depth image (160x90)
-        // 90° rotation: portrait's Y axis becomes depth's X axis,
-        //               portrait's X axis (flipped) becomes depth's Y axis
-        val depthX = (centerY / imageSize.height * depthImage.width).toInt()
-        val depthY = ((imageSize.width - centerX) / imageSize.width * depthImage.height).toInt()
 
-        val depth = sampleDepth(depthX, depthY)
-            ?: sampleDepth(depthX + 5, depthY)
-            ?: sampleDepth(depthX - 5, depthY)
-            ?: sampleDepth(depthX, depthY + 5)
-            ?: sampleDepth(depthX, depthY - 5)
-        //Log.d("DepthSample", "label=${detection.categories.maxByOrNull { it.score }?.label} " + "centerX=$centerX centerY=$centerY → depthX=$depthX depthY=$depthY depth=$depth")
-
-        detection to depth
-    }
-}
-
-// Debug toBitmap methods for viewing bitmaps as there is no native conversion method from Image to Bitmap
-//fun Image.toBitmap(): Bitmap {
-//    val yBuffer = planes[0].buffer
-//    val uBuffer = planes[1].buffer
-//    val vBuffer = planes[2].buffer
-//
-//    val ySize = yBuffer.remaining()
-//    val uSize = uBuffer.remaining()
-//    val vSize = vBuffer.remaining()
-//
-//    val nv21 = ByteArray(ySize + uSize + vSize)
-//    yBuffer.get(nv21, 0, ySize)
-//    vBuffer.get(nv21, ySize, vSize)
-//    uBuffer.get(nv21, ySize + vSize, uSize)
-//
-//    val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-//    val out = ByteArrayOutputStream()
-//    yuvImage.compressToJpeg(Rect(0, 0, width, height), 100, out)
-//    val jpegBytes = out.toByteArray()
-//    return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-//}
-
-//fun Image.toDepthBitmap(): Bitmap {
-//    val buffer = planes[0].buffer.asShortBuffer()
-//    val rowStride = planes[0].rowStride / 2
-//    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-//    for (y in 0 until height) {
-//        for (x in 0 until width) {
-//            val depthMm = buffer.get(y * rowStride + x).toInt() and 0xFFFF
-//            if (depthMm == 0) {
-//                bitmap.setPixel(x, y, android.graphics.Color.BLACK)
-//                continue
-//            }
-//            // normalize 0-8000mm to 0.0-1.0
-//            val normalized = (depthMm / 8000f).coerceIn(0f, 1f)
-//            // heatmap: close = red, mid = green, far = blue
-//            val r = ((1f - normalized) * 255).toInt().coerceIn(0, 255)
-//            val g = ((1f - Math.abs(normalized - 0.5f) * 2f) * 255).toInt().coerceIn(0, 255)
-//            val b = (normalized * 255).toInt().coerceIn(0, 255)
-//            bitmap.setPixel(x, y, android.graphics.Color.rgb(r, g, b))
-//        }
-//    }
-//    return bitmap
-//}
-
-//fun Image.toConfidenceBitmap(): Bitmap {
-//    val buffer = planes[0].buffer
-//    val rowStride = planes[0].rowStride
-//    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-//    for (y in 0 until height) {
-//        for (x in 0 until width) {
-//            val confidence = buffer.get(y * rowStride + x).toInt() and 0xFF
-//            bitmap.setPixel(x, y, android.graphics.Color.rgb(confidence, confidence, confidence))
-//        }
-//    }
-//    return bitmap
-//}
 
 // Due to how the depth API works, if your phone doesn't have a ToF sensor, it relies on motion to find the depth, which means that sometimes it takes like 15 seconds of moving the camera around to find an accurate depthmap
 @Composable
@@ -659,10 +537,11 @@ fun CameraScreen(
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
     var detectedObjectsDistances by remember {mutableStateOf<List<Pair<Detection, Float?>>>(emptyList())}
-    val detector = ObjectDetector(context) { results, size ->
-        detectedObjects = results
-        imageSize = size
+
+    val detector = remember(context) {
+        ObjectDetector(context)
     }
+
 
     val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     val audioGranted  = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -713,29 +592,49 @@ fun CameraScreen(
         ARSceneView( // due to the Depth API being used, we have to switch from cameraX to ARCore's camera implementation
             modifier = Modifier.fillMaxSize(),
             planeRenderer = true,
-            sessionConfiguration = {session, config -> if (session.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY)) {
-                config.depthMode = Config.DepthMode.RAW_DEPTH_ONLY
-            } },
-            onSessionUpdated = {_, frame ->
-                try {
-                    val image = frame.acquireCameraImage()
-                    detector.analyze(image, orientation)
-                } catch (e: NotYetAvailableException) {
-                    Log.d("Camera NotYetAvailableException", "Camera not available")
+            sessionConfiguration = { session, config ->
+                config.depthMode = when {
+                    session.isDepthModeSupported(Config.DepthMode.AUTOMATIC) -> {
+                        Log.d("DMODE","Depth mode automatic")
+                        Config.DepthMode.AUTOMATIC
+                    }
+
+                    session.isDepthModeSupported(Config.DepthMode.RAW_DEPTH_ONLY) -> {
+                        Log.d("DMODE","Depth mode RAW")
+                        Config.DepthMode.RAW_DEPTH_ONLY
+                    }
+
+                    else -> {
+                        Log.e("DMODE UNAVAIL","Depth mode DISABLED")
+                        Config.DepthMode.DISABLED
+                    }
                 }
+            },
+            onSessionUpdated = {_, frame ->
+                val frameTimestamp = frame.timestamp
 
                 try {
-                    val depthImage = frame.acquireRawDepthImage16Bits()
-                    val confidenceImage = frame.acquireRawDepthConfidenceImage()
-//                    debugDepthBitmap = depthImage.toDepthBitmap()
-                    try {
-                        detectedObjectsDistances = getDepthForDetections(depthImage, confidenceImage, detectedObjects, imageSize)
-                    } finally {
-                        depthImage.close()
-                        confidenceImage.close()
+                    val image = frame.acquireCameraImage()
+
+                    val detectionFrameResult = detector.analyze(
+                        image = image,
+                        orientation = orientation,
+                        frameTimestamp = frameTimestamp
+                    )
+                    // Distance reading is paired with the detection result from the current frame
+                    if (detectionFrameResult != null) {
+                        detectedObjects = detectionFrameResult.detections
+                        imageSize = detectionFrameResult.imageSize
+
+                        detectedObjectsDistances = getBestDepthForDetections(
+                            frame = frame,
+                            detections = detectionFrameResult.detections,
+                            imageSize = detectionFrameResult.imageSize
+                        )
                     }
+
                 } catch (e: NotYetAvailableException) {
-                    Log.d("Camera NotYetAvailableException", "Camera not available")
+                    Log.d("Camera", "Camera image not available for frame $frameTimestamp")
                 }
             }
         )
