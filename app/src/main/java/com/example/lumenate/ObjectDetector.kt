@@ -8,6 +8,7 @@ import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.media.Image
+import android.util.Log
 import android.util.Size
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.task.vision.detector.Detection
@@ -41,27 +42,47 @@ category.displayName — alternative display name if the model metadata provides
 data class DetectionFrameResult(
     val detections: List<Detection>,
     val imageSize: Size,
-    val frameTimestamp: Long
+    val frameTimestamp: Long,
 )
 
 class ObjectDetector(
     context: Context,
+    interval: Long,
+    maxResults: Int,
 ) {
+
+    private val appContext = context.applicationContext
     // Initialize the detector, its model, & all options
-    private val detector = TFObjectDetector.createFromFileAndOptions(
-        context,
+    private var detector = TFObjectDetector.createFromFileAndOptions(
+        appContext,
         "efficientdet.tflite",
         TFObjectDetector.ObjectDetectorOptions.builder()
-            .setMaxResults(5)
+            .setMaxResults(maxResults)
             .setScoreThreshold(0.4f) // Only accept detections the model is at least 40% confident about
             .build()
     )
 
+
     // Setting a ticker to go off every 5 seconds. Otherwise model will jump between objects if the room is crowded.
     // TODO: In future updates, perhaps we pause detection and allow user to give voice feedback to select an object and navigate to it
     private var lastAnalyzedTime = 0L
-    private val intervalMs = 5000L
+    private var intervalMs = interval
 
+    fun updateMaxResults(newMax: Int) {
+        detector?.close()
+        detector = TFObjectDetector.createFromFileAndOptions(
+            appContext,
+            "efficientdet.tflite",
+            TFObjectDetector.ObjectDetectorOptions.builder()
+                .setMaxResults(newMax)
+                .setScoreThreshold(0.4f)
+                .build()
+        )
+    }
+
+    fun updateInterval(newInterval: Long) {
+        intervalMs = newInterval
+    }
     // Extension function on Image so we can call it directly as image.toBitmap() throughout this class.
     // ARCore camera frames arrive in YUV_420_888 format, which TensorFlow Lite cannot consume directly,
     // so we convert to a standard Android Bitmap by going through the NV21 intermediate format.
