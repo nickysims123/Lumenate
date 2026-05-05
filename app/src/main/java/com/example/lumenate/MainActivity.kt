@@ -317,7 +317,8 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.CAMERA) {
                         popUpTo(Routes.HELP) { inclusive = true }
                     }
-                }
+                },
+                onSettingsNavigate = { navController.navigate(Routes.SETTINGS)}
                 // TODO jimmy: add nav call back for setting screen
             )
         }
@@ -552,7 +553,8 @@ private const val HELP_BLURB =
 
 @Composable
 fun HelpScreen(
-    onReturnToCamera: () -> Unit
+    onReturnToCamera: () -> Unit,
+    onSettingsNavigate: () -> Unit
 ) {
     val context = LocalContext.current
     val tts = rememberTts()
@@ -573,6 +575,7 @@ fun HelpScreen(
                 // reread the help blurb even if on help screen
                 transcript.contains("help", ignoreCase = true) ->
                     tts.speak(HELP_BLURB, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+                transcript.contains("settings", ignoreCase = true) -> onSettingsNavigate()
                 // TODO (jimmy): add callback mappings for settings screen here
             }
         }
