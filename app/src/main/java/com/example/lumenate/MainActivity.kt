@@ -588,7 +588,7 @@ fun CameraScreen(
             .filter { it.second != null }
             .minByOrNull { it.second!! }
 
-        if (closest != null && closest.second!! < 0.2f) {
+        if (closest != null && closest.second!! < 0.3f) {
             closestObject = closest.first.categories.firstOrNull()?.label ?: "Object"
             closestObjectDistance = closest.second!!
             if (now - lastAlertTime > interval) {
