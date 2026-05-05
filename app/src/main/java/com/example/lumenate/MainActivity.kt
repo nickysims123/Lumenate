@@ -843,9 +843,11 @@ fun CameraScreen(
         while (true) {
             val announcement = if (detectedObjectsDistances.isEmpty()) {
                 "No objects detected."
+            } else if (showDialog) {
+                "WARNING: YOU ARE TOO CLOSE TO ${closestObject}, DISTANCE ${closestObjectDistance}"
             } else {
                 detectedObjectsDistances
-                    .take(5)
+                    .take(maxResults)
                     .joinToString(separator = ". ") { (detection, distance) ->
                         val label = detection.categories
                             .maxByOrNull { it.score }
