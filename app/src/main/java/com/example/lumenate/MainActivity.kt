@@ -136,7 +136,7 @@ class UserPreferencesRepository(private val context: Context) {
         .map { it[KEY_ONBOARDING_COMPLETE] ?: false }
 
     val voicePreference: Flow<String> = context.dataStore.data
-        .map { it[KEY_VOICE_PREFERENCE] ?: "" }
+        .map { it[KEY_VOICE_PREFERENCE] ?: "1" }
 
     val unitPreference: Flow<String> = context.dataStore.data
         .map {  it[KEY_UNIT_PREFERENCE] ?: ""  }
