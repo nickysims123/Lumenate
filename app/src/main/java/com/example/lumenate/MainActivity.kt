@@ -627,11 +627,11 @@ fun CameraScreen(
             val announcement = if (detectedObjectsDistances.isEmpty()) {
                 "No objects detected."
             } else if (showDialog) {
-                "WARNING: YOU ARE TOO CLOSE TO ${closestObject}, DISTANCE $closestObjectDistance"
+                "WARNING: YOU ARE TOO CLOSE TO ${closestObject}, DISTANCE ${closestObjectDistance}"
             } else {
                 detectedObjectsDistances
                     .take(maxResults)
-                    .joinToString(separator = ". ") { (detection, distance) ->
+                    .mapIndexed { index, (detection, distance) ->
                         val label = detection.categories
                             .maxByOrNull { it.score }
                             ?.label
@@ -644,9 +644,14 @@ fun CameraScreen(
                             "unknown distance"
                         }
 
-                        "$label, $distanceText"
-                    }
+                        val bearingText = getMessageFromBearing(detectedObjectsBearings, index)
+                            .takeIf { it.isNotBlank() }
+                            ?.let { ", $it" }
+                            ?: ""
 
+                        "$label, $distanceText$bearingText"
+                    }
+                    .joinToString(separator = ". ")
             }
 
             tts.speakAndAwait(announcement, "objects")
@@ -808,17 +813,7 @@ fun BoundingBoxOverlay(
                 style = Stroke(width = 4.dp.toPx())
             )
 
-            val bearing = detectedObjectsBearings.getOrNull(index)?.second
-            val bearingString = if (bearing != null) {
-                val directionLabel = when (bearing.direction) {
-                    Direction.LEFT  -> "left"
-                    Direction.RIGHT -> "right"
-                    Direction.FRONT -> "forward"
-                }
-                "%.1f degrees $directionLabel".format(bearing.degrees)
-            } else {
-                ""
-            }
+            val bearingString = getMessageFromBearing(detectedObjectsBearings, index)
             drawContext.canvas.nativeCanvas.drawText(
                 "${label.label} ${(label.score * 100).toInt()}%}, $distance, $bearingString",
                 left,

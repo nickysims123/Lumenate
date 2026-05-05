@@ -68,3 +68,13 @@ fun getBearingsForDetections(
         Pair(detection, bearing)
     }
 }
+
+fun getMessageFromBearing(detectedObjectsBearings: List<Pair<Detection, Bearing?>>, index: Int): String {
+    val bearing = detectedObjectsBearings.getOrNull(index)?.second ?: return ""
+    val directionLabel = when (bearing.direction) {
+        Direction.LEFT -> "left"
+        Direction.RIGHT -> "right"
+        Direction.FRONT -> "forward"
+    }
+    return "%.1f degrees $directionLabel".format(bearing.degrees)
+}
