@@ -151,9 +151,9 @@ class UserPreferencesRepository(private val context: Context) {
     val unitPreference: Flow<String> = context.dataStore.data
         .map {  it[KEY_UNIT_PREFERENCE] ?: ""  }
 
-    val maxResultsPreference: Flow<Int> = context.dataStore.data.map { it[KEY_MAX_RESULTS_PREFERENCE] ?: 0 }
+    val maxResultsPreference: Flow<Int> = context.dataStore.data.map { it[KEY_MAX_RESULTS_PREFERENCE] ?: 5 }
 
-    val objectDetectionIntervalPreference: Flow<Long> = context.dataStore.data.map { it[KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE] ?: 0L }
+    val objectDetectionIntervalPreference: Flow<Long> = context.dataStore.data.map { it[KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE] ?: 5000L }
 
     suspend fun setOnboardingComplete(complete: Boolean) {
         context.dataStore.edit { it[KEY_ONBOARDING_COMPLETE] = complete }
@@ -770,6 +770,7 @@ fun CameraScreen(
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
     var detectedObjectsDistances by remember {mutableStateOf<List<Pair<Detection, Float?>>>(emptyList())}
+    var detectedObjectsBearings by remember {mutableStateOf<List<Pair<Detection,Bearing?>>>(emptyList())}
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
 
@@ -914,6 +915,11 @@ fun CameraScreen(
                             detections = detectionFrameResult.detections,
                             imageSize = detectionFrameResult.imageSize
                         )
+                        detectedObjectsBearings = getBearingsForDetections(
+                            image = image,
+                            detections = detectionFrameResult.detections,
+                            imageSize = imageSize
+                        )
                     }
 
                 } catch (e: NotYetAvailableException) {
@@ -925,10 +931,11 @@ fun CameraScreen(
         // Detection Results Overlay
         BoundingBoxOverlay(
             detectedObjects = detectedObjects,
+            detectedObjectsDistances = detectedObjectsDistances,
+            detectedObjectsBearings = detectedObjectsBearings,
             imageSize = imageSize,
             modifier = Modifier.fillMaxSize(),
             orientation = orientation,
-            detectedObjectsDistances = detectedObjectsDistances
         )
 
         // dev-only: tap to jump to help screen
@@ -990,6 +997,7 @@ fun CameraScreen(
 fun BoundingBoxOverlay(
     detectedObjects: List<Detection>,
     detectedObjectsDistances: List<Pair<Detection, Float?>>,
+    detectedObjectsBearings: List<Pair<Detection, Bearing?>>,
     imageSize: Size,
     modifier: Modifier = Modifier,
     orientation: DeviceOrientation
@@ -1040,8 +1048,19 @@ fun BoundingBoxOverlay(
                 style = Stroke(width = 4.dp.toPx())
             )
 
+            val bearing = detectedObjectsBearings.getOrNull(index)?.second
+            val bearingString = if (bearing != null) {
+                val directionLabel = when (bearing.direction) {
+                    Direction.LEFT  -> "left"
+                    Direction.RIGHT -> "right"
+                    Direction.FRONT -> "forward"
+                }
+                "%.1f degrees $directionLabel".format(bearing.degrees)
+            } else {
+                ""
+            }
             drawContext.canvas.nativeCanvas.drawText(
-                "${label.label} ${(label.score * 100).toInt()}%}, $distance",
+                "${label.label} ${(label.score * 100).toInt()}%}, $distance, $bearingString",
                 adjLeft,
                 (adjTop - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
                 android.graphics.Paint().apply {
