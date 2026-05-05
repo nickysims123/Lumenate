@@ -6,7 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -78,18 +82,21 @@ import java.util.Locale
 import androidx.camera.core.ImageAnalysis
 import android.util.Size
 import android.view.OrientationEventListener
-import android.view.Surface
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawWithCache
 
@@ -235,8 +242,7 @@ private object Routes {
     const val ONBOARDING = "onboarding"
     const val BLURB      = "blurb"
     const val CAMERA     = "camera"
-
-    const val SETTINGS = "settings"
+    const val SETTINGS      = "settings"
     const val HELP       = "help"
 }
 
@@ -286,7 +292,8 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.CAMERA) {
                         popUpTo(Routes.BLURB) { inclusive = true }
                     }
-                }
+                },
+                viewModel = viewModel
             )
         }
         composable(Routes.CAMERA) {
@@ -300,9 +307,6 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.HELP) {
                         popUpTo(Routes.CAMERA) { inclusive = true }
                     }
-                },
-                onSettingsNavigate = {
-                    navController.navigate((Routes.SETTINGS))
                 },
                 viewModel = viewModel
             )
@@ -318,7 +322,8 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                         popUpTo(Routes.HELP) { inclusive = true }
                     }
                 },
-                onSettingsNavigate = { navController.navigate(Routes.SETTINGS)}
+                onSettingsNavigate = { navController.navigate(Routes.SETTINGS)},
+                viewModel = viewModel
                 // TODO jimmy: add nav call back for setting screen
             )
         }
@@ -465,27 +470,31 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     }
 }
 
-// blurb screen
-private const val BLURB =
-    "The app will help you navigate around the objects nearby. " +
-            "Every 5 seconds, it will give an accurate depiction of the closest " +
+fun getBlurb(maxResults: Int, intervalMs: Long): String {
+    val intervalSeconds = intervalMs / 1000f
+
+    return "The app will help you navigate around the objects nearby." +
+            "Every $intervalSeconds seconds, it will give an accurate depiction of the closest $maxResults " +
             "object and its distance in feet or meters. If there is an object " +
             "within 5 feet, you will be alerted via an emergency message."
+}
 
 private const val BLURB_POSITIONING =
     "To get started, hold your phone flush against your chest with the screen " +
             "facing your clothes. When you are in position, say I'm Ready."
 
 @Composable
-fun BlurbScreen(onReady: () -> Unit) {
+fun BlurbScreen(onReady: () -> Unit, viewModel: MainViewModel) {
     val context = LocalContext.current
     val tts = rememberTts()
     var spokenOnce by remember { mutableStateOf(false) }
+    val maxResults by viewModel.maxResultsPreference.collectAsState()
+    val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
 
     LaunchedEffect(tts) {
         if (tts == null || spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        tts.speak("$BLURB $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
+        tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
     }
 
     LaunchedEffect(Unit) {
@@ -511,7 +520,7 @@ fun BlurbScreen(onReady: () -> Unit) {
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = BLURB,
+            text = getBlurb(maxResults, interval),
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center
         )
@@ -544,27 +553,29 @@ fun BlurbScreen(onReady: () -> Unit) {
 }
 
 // ─── Help Screen ─────────────────────────────────────────────────────────────
-// TODO (jimmy): change this blurb to match your settings accordingly
-private const val HELP_BLURB =
-    "This is the help screen. I will reread a description of the app, then give" +
-            " you some options." + BLURB +
-            "to navigate to the settings screen to change x y and z, please say settings"
-
 
 @Composable
 fun HelpScreen(
     onReturnToCamera: () -> Unit,
-    onSettingsNavigate: () -> Unit
+    onSettingsNavigate: () -> Unit,
+    viewModel: MainViewModel
 ) {
     val context = LocalContext.current
     val tts = rememberTts()
     var spokenOnce by remember { mutableStateOf(false) }
+    val maxResults by viewModel.maxResultsPreference.collectAsState()
+    val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
+
+    val helpBlurb =
+        "This is the help screen. I will reread a description of the app, then give" +
+                " you some options." + getBlurb(maxResults, interval) +
+                "to navigate to the settings screen to change x y and z, please say settings"
 
     // TTS - read the help blurb on arrival
     LaunchedEffect(tts) {
         if (tts == null || spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        tts.speak(HELP_BLURB, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+        tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
     }
 
     // STT
@@ -574,7 +585,7 @@ fun HelpScreen(
             when {
                 // reread the help blurb even if on help screen
                 transcript.contains("help", ignoreCase = true) ->
-                    tts.speak(HELP_BLURB, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+                    tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
                 transcript.contains("settings", ignoreCase = true) -> onSettingsNavigate()
                 // TODO (jimmy): add callback mappings for settings screen here
             }
@@ -598,7 +609,7 @@ fun HelpScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = HELP_BLURB,
+            text = helpBlurb,
             style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center
         )
@@ -607,9 +618,18 @@ fun HelpScreen(
 
         Button(
             onClick = onReturnToCamera,
-            modifier = Modifier.fillMaxWidth().height(150.dp)
+            modifier = Modifier.fillMaxWidth().height(100.dp)
         ) {
-            Text("Return to Camera", fontSize = 27.sp)
+            Text("Return to Camera", fontSize = 25.sp)
+        }
+
+        Spacer(modifier = Modifier.height(5.dp))
+
+        Button(
+            onClick = onSettingsNavigate,
+            modifier = Modifier.fillMaxWidth().height(100.dp)
+        ) {
+            Text("Settings", fontSize = 25.sp)
         }
 
         // TODO (jimmy): maybe have button for settings screen here too
@@ -733,7 +753,6 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 @Composable
 fun CameraScreen(
     onPermissionsRequired: () -> Unit,
-    onSettingsNavigate: () -> Unit,
     viewModel: MainViewModel,
     onHelpRequested: () -> Unit
 ) {
@@ -754,6 +773,21 @@ fun CameraScreen(
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
 
+    var showDialog by remember { mutableStateOf(false) }
+    var closestObjectDistance by remember { mutableStateOf(-1f) }
+    var closestObject by remember { mutableStateOf("") }
+    var lastAlertTime by remember { mutableLongStateOf(0L) }
+
+    // 1. Get the vibrator service (standard way for API 26-30)
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        vibratorManager.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    }
+
+    val effect = VibrationEffect.createOneShot(1000, VibrationEffect.DEFAULT_AMPLITUDE)
     val detector = remember(context) {
         ObjectDetector(context, interval, maxResults)
     }
@@ -761,6 +795,26 @@ fun CameraScreen(
     //    settings updates
     LaunchedEffect(maxResults) {
         detector.updateMaxResults(maxResults)
+    }
+
+    LaunchedEffect(detectedObjectsDistances) {
+        val now = System.currentTimeMillis()
+
+        val closest = detectedObjectsDistances
+            .filter { it.second != null }
+            .minByOrNull { it.second!! }
+
+        if (closest != null && closest.second!! < 0.3f) {
+            closestObject = closest.first.categories.firstOrNull()?.label ?: "Object"
+            closestObjectDistance = closest.second!!
+            if (now - lastAlertTime > interval) {
+                showDialog = true
+                vibrator.vibrate(effect)
+                lastAlertTime = now
+            }
+        } else {
+            showDialog = false
+        }
     }
 
     LaunchedEffect(interval) {
@@ -780,6 +834,8 @@ fun CameraScreen(
             }
         }
     }
+
+    LaunchedEffect(detectedObjectsDistances) { }
 
     // notification loop - speaks all detected objects & if they have a corresponding distance; 5-second gap starts after speech ends
     LaunchedEffect(tts) {
@@ -881,6 +937,48 @@ fun CameraScreen(
                 .padding(8.dp)
         ) {
             Text("Help", fontSize = 14.sp)
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+
+            if (showDialog) {
+                // Non-blocking Card anchored to the top or center
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 100.dp) // Below your back button
+                        .fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 10.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = "PROXIMITY WARNING",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "$closestObject is ${"%.1f".format(closestObjectDistance)}m away",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
