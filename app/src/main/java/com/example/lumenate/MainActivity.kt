@@ -111,7 +111,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
-import com.example.lumenate.REVERSE_VOICE_OPTIONS
 import com.google.ar.core.Config
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
@@ -138,9 +137,6 @@ class UserPreferencesRepository(private val context: Context) {
     val voicePreference: Flow<String> = context.dataStore.data
         .map { it[KEY_VOICE_PREFERENCE] ?: "1" }
 
-    val unitPreference: Flow<String> = context.dataStore.data
-        .map {  it[KEY_UNIT_PREFERENCE] ?: ""  }
-
     val maxResultsPreference: Flow<Int> = context.dataStore.data.map { it[KEY_MAX_RESULTS_PREFERENCE] ?: 5 }
 
     val objectDetectionIntervalPreference: Flow<Long> = context.dataStore.data.map { it[KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE] ?: 5000L }
@@ -153,9 +149,6 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { it[KEY_VOICE_PREFERENCE] = preference }
     }
 
-    suspend fun setUnitPreference(unit: String) {
-        context.dataStore.edit { it[KEY_UNIT_PREFERENCE] = unit}
-    }
 
     suspend fun setMaxResultsPreference(maxResults: Int) {
         context.dataStore.edit { it[KEY_MAX_RESULTS_PREFERENCE] = maxResults }
@@ -192,10 +185,6 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
         viewModelScope.launch { repository.setVoicePreference(preference) }
     }
 
-    fun setUnitPreference(unit: String) {
-        viewModelScope.launch { repository.setUnitPreference(unit) }
-    }
-
 
     fun setMaxResultsPreference(maxResults: Int) {
         viewModelScope.launch { repository.setMaxResultsPreference(maxResults) }
@@ -215,13 +204,10 @@ private val VOICE_OPTIONS = mapOf(
     "3" to "en-US-Neural2-J"  // male, deeper
 )
 
-private val REVERSE_VOICE_OPTIONS = mapOf("en-US-Neural2-A" to 1,
-"en-US-Neural2-F" to 2, "en-US-Neural2-J" to 3)
 private const val DEFAULT_VOICE = "en-US-Neural2-A"
 
 private fun voiceForPref(pref: String): String = VOICE_OPTIONS[pref] ?: DEFAULT_VOICE
 
-private fun reverseVoiceForPref(pref: String): Int = REVERSE_VOICE_OPTIONS[pref] ?: 1
 class GoogleTts(
     private val context: Context,
     private val scope: CoroutineScope,
