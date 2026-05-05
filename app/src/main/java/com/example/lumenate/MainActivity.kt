@@ -217,7 +217,7 @@ private val VOICE_OPTIONS = mapOf(
 
 private val REVERSE_VOICE_OPTIONS = mapOf("en-US-Neural2-A" to 1,
 "en-US-Neural2-F" to 2, "en-US-Neural2-J" to 3)
-private const val DEFAULT_VOICE = "en-US-Neural2-C"
+private const val DEFAULT_VOICE = "en-US-Neural2-A"
 
 private fun voiceForPref(pref: String): String = VOICE_OPTIONS[pref] ?: DEFAULT_VOICE
 
