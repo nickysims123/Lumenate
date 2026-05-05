@@ -1176,34 +1176,12 @@ fun BoundingBoxOverlay(
             val right  = box.right  * scaleX
             val bottom = box.bottom * scaleY
 
-            // Flip coordinates based on orientation
-            val (adjLeft, adjTop, adjRight, adjBottom) = when (orientation) {
-                DeviceOrientation.PORTRAIT -> listOf(left, top, right, bottom)
-                DeviceOrientation.REVERSE_PORTRAIT -> listOf(
-                    size.width - right,
-                    size.height - bottom,
-                    size.width - left,
-                    size.height - top
-                )
-                DeviceOrientation.LANDSCAPE -> listOf(
-                    size.width - right,
-                    top,
-                    size.width - left,
-                    bottom
-                )
-                DeviceOrientation.REVERSE_LANDSCAPE -> listOf(
-                    left,
-                    size.height - bottom,
-                    right,
-                    size.height - top
-                )
-            }
 
             val distance = detectedObjectsDistances.getOrNull(index)?.second
             drawRect(
                 color = color,
-                topLeft = Offset(adjLeft, adjTop),
-                size = androidx.compose.ui.geometry.Size(adjRight - adjLeft, adjBottom - adjTop),
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
                 style = Stroke(width = 4.dp.toPx())
             )
 
@@ -1220,8 +1198,8 @@ fun BoundingBoxOverlay(
             }
             drawContext.canvas.nativeCanvas.drawText(
                 "${label.label} ${(label.score * 100).toInt()}%}, $distance, $bearingString",
-                adjLeft,
-                (adjTop - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
+                left,
+                (top - 8.dp.toPx()).coerceAtLeast(16.dp.toPx()),
                 android.graphics.Paint().apply {
                     this.color = android.graphics.Color.WHITE
                     textSize = 40f
