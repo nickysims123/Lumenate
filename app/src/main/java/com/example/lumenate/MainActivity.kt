@@ -111,6 +111,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import com.example.lumenate.REVERSE_VOICE_OPTIONS
 import com.google.ar.core.Config
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
@@ -213,15 +214,20 @@ private val VOICE_OPTIONS = mapOf(
     "2" to "en-US-Neural2-F", // female
     "3" to "en-US-Neural2-J"  // male, deeper
 )
+
+private val REVERSE_VOICE_OPTIONS = mapOf("en-US-Neural2-A" to 1,
+"en-US-Neural2-F" to 2, "en-US-Neural2-J" to 3)
 private const val DEFAULT_VOICE = "en-US-Neural2-C"
 
 private fun voiceForPref(pref: String): String = VOICE_OPTIONS[pref] ?: DEFAULT_VOICE
 
+private fun reverseVoiceForPref(pref: String): Int = REVERSE_VOICE_OPTIONS[pref] ?: 1
 class GoogleTts(
     private val context: Context,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val voice: String
 ) {
-    @Volatile var voiceName: String = DEFAULT_VOICE
+    @Volatile var voiceName: String = voice
 
     private val client = OkHttpClient()
     private var mediaPlayer: MediaPlayer? = null
@@ -335,10 +341,10 @@ class GoogleTts(
 }
 
 @Composable
-fun rememberTts(voicePref: String = ""): GoogleTts {
+fun rememberTts(voicePref: String): GoogleTts {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val tts = remember { GoogleTts(context, scope) }
+    val tts = remember { GoogleTts(context, scope, voicePref) }
     LaunchedEffect(voicePref) {
         tts.voiceName = voiceForPref(voicePref)
     }
@@ -396,7 +402,8 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.BLURB) {
                         popUpTo(Routes.ONBOARDING) { inclusive = true }
                     }
-                }
+                },
+                viewModel = viewModel
             )
         }
         composable(Routes.BLURB) {
@@ -452,9 +459,10 @@ private const val ONBOARDING_TTS =
             "If a permission was denied, say allow or tap the button to try again."
 
 @Composable
-fun OnboardingScreen(onPermissionGranted: () -> Unit) {
+fun OnboardingScreen(onPermissionGranted: () -> Unit, viewModel: MainViewModel) {
     val context = LocalContext.current
-    val tts = rememberTts()
+    val voicePref by viewModel.voicePreference.collectAsState()
+    val tts = rememberTts(voicePref)
 
     var cameraGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -644,6 +652,22 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 viewModel.setObjectDetectionIntervalPreference(newValue.toLong())
             },
             valueRange = 1000f..10000f, // 1s to 10s
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- Voice Adjustment Slider ---
+        Text(text = "Voice $voicePreference")
+        Slider(
+            value = voicePreference.toFloat(),
+            onValueChange = { newValue ->
+                val voiceKey = newValue.toInt().toString()
+                tts.voiceName = voiceForPref(voiceKey)
+                viewModel.setVoicePreference(voiceKey)
+                tts.speak("Okay, this is the voice you have selected.", "voice_selected")
+            },
+            valueRange = 1f..3f, // 1 to 3
+            steps = 3
         )
     }
 }
