@@ -5,7 +5,9 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -16,8 +18,20 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Base64
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -50,6 +64,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -77,7 +92,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 import java.util.Locale
 import androidx.camera.core.ImageAnalysis
 import android.util.Size
@@ -186,6 +200,9 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
     val onboardingComplete: StateFlow<Boolean?> = repository.onboardingComplete
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    val voicePreference: StateFlow<String> = repository.voicePreference
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
     val maxResultsPreference: StateFlow<Int> = repository.maxResultsPreference.stateIn(viewModelScope,
         SharingStarted.WhileSubscribed((5000)), 5)
 
@@ -213,7 +230,152 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
     }
 }
 
-// text to speech help func
+// ─── Google Cloud Text-to-Speech ─────────────────────────────────────────────
+// Replaces the Android built-in TextToSpeech engine. The old Android TTS code
+// is commented out
+
+// 3 selectable voices (chosen via "1", "2", or "3" on the settings screen)
+private val VOICE_OPTIONS = mapOf(
+    "1" to "en-US-Neural2-A", // male
+    "2" to "en-US-Neural2-F", // female
+    "3" to "en-US-Neural2-J"  // male, deeper
+)
+private const val DEFAULT_VOICE = "en-US-Neural2-C"
+
+private fun voiceForPref(pref: String): String = VOICE_OPTIONS[pref] ?: DEFAULT_VOICE
+
+class GoogleTts(
+    private val context: Context,
+    private val scope: CoroutineScope
+) {
+    @Volatile var voiceName: String = DEFAULT_VOICE
+
+    private val client = OkHttpClient()
+    private var mediaPlayer: MediaPlayer? = null
+    private var currentJob: Job? = null
+
+    fun speak(text: String, utteranceId: String = "default") {
+        currentJob?.cancel()
+        currentJob = scope.launch {
+            runCatching { playText(text, null) }
+                .onFailure { Log.e("GoogleTts", "speak failed: ${it.message}") }
+        }
+    }
+
+    suspend fun speakAndAwait(text: String, utteranceId: String = "default") {
+        currentJob?.cancel()
+        suspendCancellableCoroutine<Unit> { cont ->
+            val job = scope.launch {
+                runCatching {
+                    playText(text) { if (cont.isActive) cont.resume(Unit) {} }
+                }.onFailure {
+                    Log.e("GoogleTts", "speakAndAwait failed: ${it.message}")
+                    if (cont.isActive) cont.resume(Unit) {}
+                }
+            }
+            currentJob = job
+            cont.invokeOnCancellation {
+                job.cancel()
+                stop()
+            }
+        }
+    }
+
+    fun stop() {
+        currentJob?.cancel()
+        runCatching { mediaPlayer?.stop() }
+        mediaPlayer?.release()
+        mediaPlayer = null
+    }
+
+    fun shutdown() = stop()
+
+    private suspend fun playText(text: String, onComplete: (() -> Unit)?) {
+        val audio = withContext(Dispatchers.IO) { synthesize(text) }
+        if (audio == null) {
+            onComplete?.invoke()
+            return
+        }
+        val tempFile = File.createTempFile("tts_", ".mp3", context.cacheDir).apply {
+            writeBytes(audio)
+            deleteOnExit()
+        }
+        withContext(Dispatchers.Main) {
+            runCatching { mediaPlayer?.stop() }
+            mediaPlayer?.release()
+            val mp = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                setDataSource(tempFile.absolutePath)
+                setOnCompletionListener { player ->
+                    player.release()
+                    tempFile.delete()
+                    if (mediaPlayer === player) mediaPlayer = null
+                    onComplete?.invoke()
+                }
+                setOnErrorListener { _, what, extra ->
+                    Log.e("GoogleTts", "MediaPlayer error what=$what extra=$extra")
+                    tempFile.delete()
+                    onComplete?.invoke()
+                    true
+                }
+                prepare()
+                start()
+            }
+            mediaPlayer = mp
+        }
+    }
+
+    private fun synthesize(text: String): ByteArray? {
+        val key = BuildConfig.GOOGLE_API_KEY
+        if (key.isBlank()) {
+            Log.e("GoogleTts", "GOOGLE_API_KEY is empty — set it in local.properties")
+            return null
+        }
+        val body = JSONObject().apply {
+            put("input", JSONObject().put("text", text))
+            put("voice", JSONObject().apply {
+                put("languageCode", "en-US")
+                put("name", voiceName)
+            })
+            put("audioConfig", JSONObject().put("audioEncoding", "MP3"))
+        }.toString().toRequestBody("application/json".toMediaType())
+
+        val req = Request.Builder()
+            .url("https://texttospeech.googleapis.com/v1/text:synthesize?key=$key")
+            .post(body)
+            .build()
+
+        return client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                Log.e("GoogleTts", "synthesize HTTP ${resp.code}: ${resp.body?.string()}")
+                return null
+            }
+            val audioContent = JSONObject(resp.body?.string() ?: "{}").optString("audioContent")
+            if (audioContent.isBlank()) null else Base64.decode(audioContent, Base64.DEFAULT)
+        }
+    }
+}
+
+@Composable
+fun rememberTts(voicePref: String = ""): GoogleTts {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val tts = remember { GoogleTts(context, scope) }
+    LaunchedEffect(voicePref) {
+        tts.voiceName = voiceForPref(voicePref)
+    }
+    DisposableEffect(Unit) {
+        onDispose { tts.shutdown() }
+    }
+    return tts
+}
+
+/* ─── OLD: Android built-in TextToSpeech (kept for revert) ────────────────────
 @Composable
 fun rememberTts(): TextToSpeech? {
     val context = LocalContext.current
@@ -235,6 +397,7 @@ fun rememberTts(): TextToSpeech? {
 
     return tts
 }
+*/
 
 // activity routes - we don't really need multiple activities if the app has one function
 
@@ -365,7 +528,8 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 
     // speak instructions to user
     LaunchedEffect(tts) {
-        tts?.speak(ONBOARDING_TTS, TextToSpeech.QUEUE_FLUSH, null, "onboarding")
+        // OLD (Android TTS): tts?.speak(ONBOARDING_TTS, TextToSpeech.QUEUE_FLUSH, null, "onboarding")
+        tts.speak(ONBOARDING_TTS, "onboarding")
     }
 
     // potentially could allow for permission grants, haven't tested yet
@@ -410,8 +574,29 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 @Composable
 fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     // 1. Collect the state from ViewModel
+    val context = LocalContext.current
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
+    val voicePreference by viewModel.voicePreference.collectAsState()
+    val tts = rememberTts(voicePreference)
+
+    // STT for voice selection: user says "1", "2", or "3"
+    LaunchedEffect(Unit) {
+        continuousSpeechFlow(context).collect { transcript ->
+            val words = transcript.lowercase().split(Regex("\\W+"))
+            val voiceKey = when {
+                "3" in words || "three" in words -> "3"
+                "2" in words || "two" in words -> "2"
+                "1" in words || "one" in words -> "1"
+                else -> null
+            }
+            if (voiceKey != null) {
+                tts.voiceName = voiceForPref(voiceKey)
+                viewModel.setVoicePreference(voiceKey)
+                tts.speak("Okay, this is the voice you have selected.", "voice_selected")
+            }
+        }
+    }
 
     Column(modifier = Modifier.padding(16.dp).statusBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -486,15 +671,17 @@ private const val BLURB_POSITIONING =
 @Composable
 fun BlurbScreen(onReady: () -> Unit, viewModel: MainViewModel) {
     val context = LocalContext.current
-    val tts = rememberTts()
+    val voicePreference by viewModel.voicePreference.collectAsState()
+    val tts = rememberTts(voicePreference)
     var spokenOnce by remember { mutableStateOf(false) }
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
 
     LaunchedEffect(tts) {
-        if (tts == null || spokenOnce) return@LaunchedEffect
+        if (spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
+        // OLD (Android TTS): tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
+        tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", "blurb")
     }
 
     LaunchedEffect(Unit) {
@@ -561,7 +748,8 @@ fun HelpScreen(
     viewModel: MainViewModel
 ) {
     val context = LocalContext.current
-    val tts = rememberTts()
+    val voicePreference by viewModel.voicePreference.collectAsState()
+    val tts = rememberTts(voicePreference)
     var spokenOnce by remember { mutableStateOf(false) }
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
@@ -573,19 +761,20 @@ fun HelpScreen(
 
     // TTS - read the help blurb on arrival
     LaunchedEffect(tts) {
-        if (tts == null || spokenOnce) return@LaunchedEffect
+        if (spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+        // OLD (Android TTS): tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+        tts.speak(helpBlurb, "help_blurb")
     }
 
     // STT
     LaunchedEffect(tts) {
-        if (tts == null) return@LaunchedEffect
         continuousSpeechFlow(context).collect { transcript ->
             when {
                 // reread the help blurb even if on help screen
                 transcript.contains("help", ignoreCase = true) ->
-                    tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+                    // OLD (Android TTS): tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
+                    tts.speak(helpBlurb, "help_blurb")
                 transcript.contains("settings", ignoreCase = true) -> onSettingsNavigate()
                 // TODO (jimmy): add callback mappings for settings screen here
             }
@@ -701,7 +890,7 @@ private fun continuousSpeechFlow(context: Context): Flow<String> = callbackFlow 
 
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
-// Suspends until TTS finishes speaking so the 5-second gap starts after speech ends.
+/* OLD (Android TTS): replaced by GoogleTts.speakAndAwait member function — kept for revert.
 private suspend fun TextToSpeech.speakAndAwait(text: String, id: String) =
     suspendCancellableCoroutine<Unit> { cont ->
         setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -713,6 +902,7 @@ private suspend fun TextToSpeech.speakAndAwait(text: String, id: String) =
         speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
         cont.invokeOnCancellation { stop() }
     }
+*/
 
 enum class DeviceOrientation {
     PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
@@ -759,7 +949,8 @@ fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    val tts = rememberTts()
+    val voicePreference by viewModel.voicePreference.collectAsState()
+    val tts = rememberTts(voicePreference)
     var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT) }
     DeviceOrientationListener(context.applicationContext) { orientation = it }
 //    debug images for viewing
@@ -839,7 +1030,6 @@ fun CameraScreen(
 
     // notification loop - speaks all detected objects & if they have a corresponding distance; 5-second gap starts after speech ends
     LaunchedEffect(tts) {
-        if (tts == null) return@LaunchedEffect
         while (true) {
             val announcement = if (detectedObjectsDistances.isEmpty()) {
                 "No objects detected."
