@@ -47,7 +47,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -81,13 +80,32 @@ import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawWithCache
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 import com.google.ar.core.Config
 
@@ -95,7 +113,6 @@ import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
 
 import org.tensorflow.lite.task.vision.detector.Detection
-
 
 
 
@@ -109,7 +126,9 @@ private val KEY_VOICE_PREFERENCE    = stringPreferencesKey("voice_preference")
 
 private val KEY_UNIT_PREFERENCE = stringPreferencesKey("unit_preference")
 
+private val KEY_MAX_RESULTS_PREFERENCE = intPreferencesKey("max_results_preference")
 
+private val KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE = longPreferencesKey("object_detection_interval_preference")
 // app-specific preferences class
 class UserPreferencesRepository(private val context: Context) {
 
@@ -122,6 +141,10 @@ class UserPreferencesRepository(private val context: Context) {
     val unitPreference: Flow<String> = context.dataStore.data
         .map {  it[KEY_UNIT_PREFERENCE] ?: ""  }
 
+    val maxResultsPreference: Flow<Int> = context.dataStore.data.map { it[KEY_MAX_RESULTS_PREFERENCE] ?: 0 }
+
+    val objectDetectionIntervalPreference: Flow<Long> = context.dataStore.data.map { it[KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE] ?: 0L }
+
     suspend fun setOnboardingComplete(complete: Boolean) {
         context.dataStore.edit { it[KEY_ONBOARDING_COMPLETE] = complete }
     }
@@ -133,6 +156,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setUnitPreference(unit: String) {
         context.dataStore.edit { it[KEY_UNIT_PREFERENCE] = unit}
     }
+
+    suspend fun setMaxResultsPreference(maxResults: Int) {
+        context.dataStore.edit { it[KEY_MAX_RESULTS_PREFERENCE] = maxResults }
+    }
+
+    suspend fun setObjectDetectionIntervalPreference(interval: Long) {
+        context.dataStore.edit { it[KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE] = interval}
+    }
+
 }
 
 // ViewModel for preferences
@@ -144,6 +176,11 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
     val onboardingComplete: StateFlow<Boolean?> = repository.onboardingComplete
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    val maxResultsPreference: StateFlow<Int> = repository.maxResultsPreference.stateIn(viewModelScope,
+        SharingStarted.WhileSubscribed((5000)), 5)
+
+    val objectDetectionIntervalPreference: StateFlow<Long> = repository.objectDetectionIntervalPreference.stateIn(viewModelScope,
+        SharingStarted.WhileSubscribed((5000)), 5000L)
     fun completeOnboarding() {
         viewModelScope.launch { repository.setOnboardingComplete(true) }
     }
@@ -154,6 +191,15 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
 
     fun setUnitPreference(unit: String) {
         viewModelScope.launch { repository.setUnitPreference(unit) }
+    }
+
+
+    fun setMaxResultsPreference(maxResults: Int) {
+        viewModelScope.launch { repository.setMaxResultsPreference(maxResults) }
+    }
+
+    fun setObjectDetectionIntervalPreference(interval: Long) {
+        viewModelScope.launch { repository.setObjectDetectionIntervalPreference((interval)) }
     }
 }
 
@@ -186,6 +232,8 @@ private object Routes {
     const val ONBOARDING = "onboarding"
     const val BLURB      = "blurb"
     const val CAMERA     = "camera"
+
+    const val SETTINGS = "settings"
 }
 
 // main activity
@@ -243,8 +291,16 @@ fun AppNavigation(startDestination: String, viewModel: MainViewModel) {
                     navController.navigate(Routes.ONBOARDING) {
                         popUpTo(Routes.CAMERA) { inclusive = true }
                     }
-                }
+                },
+                onSettingsNavigate = {
+                    navController.navigate((Routes.SETTINGS))
+                },
+                viewModel = viewModel
             )
+        }
+
+        composable(Routes.SETTINGS) {
+            SettingsScreen(viewModel, {navController.navigate((Routes.CAMERA))})
         }
     }
 }
@@ -323,6 +379,69 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
         ) {
             Text("Grant Permissions", fontSize = 27.sp)
         }
+    }
+}
+
+@Composable
+fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
+    // 1. Collect the state from ViewModel
+    val maxResults by viewModel.maxResultsPreference.collectAsState()
+    val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
+
+    Column(modifier = Modifier.padding(16.dp).statusBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .padding(horizontal = 4.dp)
+        ) {
+            IconButton(
+                onClick = { onBack() },
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
+            Text(
+                text = "Settings Menu",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                ),
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        // --- Max Results Slider ---
+        Text(text = "Max Results: $maxResults", style = MaterialTheme.typography.bodyLarge)
+        Slider(
+            value = maxResults.toFloat(),
+            onValueChange = { newValue ->
+                viewModel.setMaxResultsPreference(newValue.toInt())
+            },
+            valueRange = 1f..10f,
+            steps = 8
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // --- Detection Interval Slider ---
+        // Displaying in seconds for better readability
+        val intervalInSeconds = interval / 1000f
+        Text(text = "Scan Every: ${"%.1f".format(intervalInSeconds)} seconds")
+
+        Slider(
+            value = interval.toFloat(),
+            onValueChange = { newValue ->
+                viewModel.setObjectDetectionIntervalPreference(newValue.toLong())
+            },
+            valueRange = 1000f..10000f, // 1s to 10s
+        )
     }
 }
 
@@ -521,7 +640,9 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
 @Composable
 fun CameraScreen(
     onPermissionsRequired: () -> Unit,
-    onHelpRequested: () -> Unit = {}  // TODO: wire to help screen in AppNav
+    onHelpRequested: () -> Unit = {},  // TODO: wire to help screen in AppNav,
+    onSettingsNavigate: () -> Unit,
+    viewModel: MainViewModel
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -537,9 +658,20 @@ fun CameraScreen(
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
     var detectedObjectsDistances by remember {mutableStateOf<List<Pair<Detection, Float?>>>(emptyList())}
+    val maxResults by viewModel.maxResultsPreference.collectAsState()
+    val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
 
     val detector = remember(context) {
-        ObjectDetector(context)
+        ObjectDetector(context, interval, maxResults)
+    }
+
+    //    settings updates
+    LaunchedEffect(maxResults) {
+        detector.updateMaxResults(maxResults)
+    }
+
+    LaunchedEffect(interval) {
+        detector.updateInterval(interval)
     }
 
 
