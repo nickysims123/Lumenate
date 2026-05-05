@@ -206,8 +206,6 @@ class MainViewModel(application: android.app.Application) : AndroidViewModel(app
 }
 
 // ─── Google Cloud Text-to-Speech ─────────────────────────────────────────────
-// Replaces the Android built-in TextToSpeech engine. The old Android TTS code
-// is commented out
 
 // 3 selectable voices (chosen via "1", "2", or "3" on the settings screen)
 private val VOICE_OPTIONS = mapOf(
@@ -350,29 +348,6 @@ fun rememberTts(voicePref: String = ""): GoogleTts {
     return tts
 }
 
-/* ─── OLD: Android built-in TextToSpeech (kept for revert) ────────────────────
-@Composable
-fun rememberTts(): TextToSpeech? {
-    val context = LocalContext.current
-    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-
-    DisposableEffect(Unit) {
-        var engine: TextToSpeech? = null
-        engine = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                engine?.language = Locale.US
-                tts = engine
-            }
-        }
-        onDispose {
-            engine?.stop()
-            engine?.shutdown()
-        }
-    }
-
-    return tts
-}
-*/
 
 // activity routes - we don't really need multiple activities if the app has one function
 
@@ -506,7 +481,6 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
         tts.speak(ONBOARDING_TTS, "onboarding")
     }
 
-    // potentially could allow for permission grants, haven't tested yet
     LaunchedEffect(audioGranted) {
         if (!audioGranted) return@LaunchedEffect
         continuousSpeechFlow(context).collect { transcript ->
@@ -552,21 +526,67 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
     val voicePreference by viewModel.voicePreference.collectAsState()
     val tts = rememberTts(voicePreference)
+    var spokenOnce by remember { mutableStateOf(false) }
 
-    // STT for voice selection: user says "1", "2", or "3"
+    val intervalSecondsSpoken = interval / 1000f
+    val settingsBlurb =
+        "Settings menu. There are three settings you can change. " +
+                "First, max objects, currently set to $maxResults. This controls how many " +
+                "nearby objects are reported each scan, from one to ten. To change it, say " +
+                "objects, followed by a number from one to ten. For example, say objects five. " +
+                "Second, scan interval, currently set to ${"%.1f".format(intervalSecondsSpoken)} seconds. " +
+                "This controls how often the camera scans for objects, from one to ten seconds. " +
+                "To change it, say interval, followed by a number from one to ten. " +
+                "For example, say interval three. " +
+                "Third, voice. To change the voice, say voice, followed by one, two, or three. " +
+                "For example, say voice two."
+
+    LaunchedEffect(tts) {
+        if (spokenOnce) return@LaunchedEffect
+        spokenOnce = true
+        tts.speak(settingsBlurb, "settings_blurb")
+    }
+
+    // STT for voice selection ("1"/"2"/"3"), and slider commands ("objects N", "interval N")
     LaunchedEffect(Unit) {
         continuousSpeechFlow(context).collect { transcript ->
-            val words = transcript.lowercase().split(Regex("\\W+"))
-            val voiceKey = when {
-                "3" in words || "three" in words -> "3"
-                "2" in words || "two" in words -> "2"
-                "1" in words || "one" in words -> "1"
-                else -> null
+            val lower = transcript.lowercase()
+            val words = lower.split(Regex("\\W+"))
+
+            val numberWords = mapOf(
+                "one" to 1, "two" to 2, "three" to 3, "four" to 4, "five" to 5,
+                "six" to 6, "seven" to 7, "eight" to 8, "nine" to 9, "ten" to 10
+            )
+            fun firstNumberAfter(keyword: String): Int? {
+                val idx = words.indexOf(keyword)
+                if (idx == -1) return null
+                for (i in (idx + 1) until words.size) {
+                    val w = words[i]
+                    val n = w.toIntOrNull() ?: numberWords[w]
+                    if (n != null && n in 1..10) return n
+                }
+                return null
             }
-            if (voiceKey != null) {
-                tts.voiceName = voiceForPref(voiceKey)
-                viewModel.setVoicePreference(voiceKey)
-                tts.speak("Okay, this is the voice you have selected.", "voice_selected")
+
+            val objectsValue = firstNumberAfter("objects") ?: firstNumberAfter("object")
+            val intervalValue = firstNumberAfter("interval")
+            val voiceValue = firstNumberAfter("voice")?.takeIf { it in 1..3 }
+
+            when {
+                objectsValue != null -> {
+                    viewModel.setMaxResultsPreference(objectsValue)
+                    tts.speak("Objects set to $objectsValue.", "objects_set")
+                }
+                intervalValue != null -> {
+                    viewModel.setObjectDetectionIntervalPreference(intervalValue * 1000L)
+                    tts.speak("Interval set to $intervalValue seconds.", "interval_set")
+                }
+                voiceValue != null -> {
+                    val voiceKey = voiceValue.toString()
+                    tts.voiceName = voiceForPref(voiceKey)
+                    viewModel.setVoicePreference(voiceKey)
+                    tts.speak("Okay, this is the voice you have selected.", "voice_selected")
+                }
             }
         }
     }
