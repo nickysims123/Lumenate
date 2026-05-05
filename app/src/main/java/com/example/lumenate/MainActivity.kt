@@ -1,7 +1,6 @@
 package com.example.lumenate
 
 import android.Manifest
-
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -16,8 +15,6 @@ import android.os.VibratorManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -38,9 +35,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-
 import androidx.camera.lifecycle.ProcessCameraProvider
-
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -92,8 +86,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import java.util.Locale
-import androidx.camera.core.ImageAnalysis
 import android.util.Size
 import android.view.OrientationEventListener
 import androidx.compose.material3.Surface
@@ -105,39 +97,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.drawWithCache
-
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.lifecycle.viewmodel.compose.viewModel
-
 import com.google.ar.core.Config
-
 import com.google.ar.core.exceptions.NotYetAvailableException
 import io.github.sceneview.ar.ARSceneView
-
 import org.tensorflow.lite.task.vision.detector.Detection
-
-
-
-
 
 // DataStore Preferences to store onboarding completion status, voice, and unit selection
 
@@ -152,8 +129,6 @@ private val KEY_MAX_RESULTS_PREFERENCE = intPreferencesKey("max_results_preferen
 
 private val KEY_OBJECT_DETECTION_INTERVAL_PREFERENCE = longPreferencesKey("object_detection_interval_preference")
 // app-specific preferences class
-//TODO (jimmy): change this to your settings accordingly
-// once i get the google voice api working ill change it after you
 class UserPreferencesRepository(private val context: Context) {
 
     val onboardingComplete: Flow<Boolean> = context.dataStore.data
@@ -528,7 +503,6 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 
     // speak instructions to user
     LaunchedEffect(tts) {
-        // OLD (Android TTS): tts?.speak(ONBOARDING_TTS, TextToSpeech.QUEUE_FLUSH, null, "onboarding")
         tts.speak(ONBOARDING_TTS, "onboarding")
     }
 
@@ -573,7 +547,6 @@ fun OnboardingScreen(onPermissionGranted: () -> Unit) {
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
-    // 1. Collect the state from ViewModel
     val context = LocalContext.current
     val maxResults by viewModel.maxResultsPreference.collectAsState()
     val interval by viewModel.objectDetectionIntervalPreference.collectAsState()
@@ -680,7 +653,6 @@ fun BlurbScreen(onReady: () -> Unit, viewModel: MainViewModel) {
     LaunchedEffect(tts) {
         if (spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        // OLD (Android TTS): tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", TextToSpeech.QUEUE_FLUSH, null, "blurb")
         tts.speak("${getBlurb(maxResults, interval)} $BLURB_POSITIONING", "blurb")
     }
 
@@ -763,7 +735,6 @@ fun HelpScreen(
     LaunchedEffect(tts) {
         if (spokenOnce) return@LaunchedEffect
         spokenOnce = true
-        // OLD (Android TTS): tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
         tts.speak(helpBlurb, "help_blurb")
     }
 
@@ -773,10 +744,8 @@ fun HelpScreen(
             when {
                 // reread the help blurb even if on help screen
                 transcript.contains("help", ignoreCase = true) ->
-                    // OLD (Android TTS): tts.speak(helpBlurb, TextToSpeech.QUEUE_FLUSH, null, "help_blurb")
                     tts.speak(helpBlurb, "help_blurb")
                 transcript.contains("settings", ignoreCase = true) -> onSettingsNavigate()
-                // TODO (jimmy): add callback mappings for settings screen here
             }
         }
     }
@@ -820,8 +789,6 @@ fun HelpScreen(
         ) {
             Text("Settings", fontSize = 25.sp)
         }
-
-        // TODO (jimmy): maybe have button for settings screen here too
     }
 }
 
@@ -890,20 +857,6 @@ private fun continuousSpeechFlow(context: Context): Flow<String> = callbackFlow 
 
 // ─── Camera Screen ───────────────────────────────────────────────────────────
 
-/* OLD (Android TTS): replaced by GoogleTts.speakAndAwait member function — kept for revert.
-private suspend fun TextToSpeech.speakAndAwait(text: String, id: String) =
-    suspendCancellableCoroutine<Unit> { cont ->
-        setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(u: String?) {}
-            override fun onDone(u: String?) { if (cont.isActive) cont.resume(Unit) {} }
-            override fun onError(u: String?) { if (cont.isActive) cont.resume(Unit) {} }
-            override fun onStop(u: String?, interrupted: Boolean) { if (cont.isActive) cont.resume(Unit) {} }
-        })
-        speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-        cont.invokeOnCancellation { stop() }
-    }
-*/
-
 enum class DeviceOrientation {
     PORTRAIT, REVERSE_LANDSCAPE, LANDSCAPE, REVERSE_PORTRAIT
 }
@@ -926,7 +879,7 @@ fun DeviceOrientationListener(applicationContext: Context, onOrientationChange: 
         }
         orientationEventListener.enable()
 
-        // Disable the event onDispose
+        // Disable the event
         onDispose {
             orientationEventListener.disable()
         }
@@ -953,11 +906,6 @@ fun CameraScreen(
     val tts = rememberTts(voicePreference)
     var orientation by remember { mutableStateOf(DeviceOrientation.PORTRAIT) }
     DeviceOrientationListener(context.applicationContext) { orientation = it }
-//    debug images for viewing
-//    var debugDepthBitmap by remember { mutableStateOf<Bitmap?>(null) }
-//    var debugCameraBitmap by remember { mutableStateOf<Bitmap?>(null) }
-//    var debugConfidenceBitmap by remember { mutableStateOf<Bitmap?>(null) }
-
     var detectedObjects by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var imageSize by remember { mutableStateOf(Size(1, 1)) }  // avoid div-by-zero
     var detectedObjectsDistances by remember {mutableStateOf<List<Pair<Detection, Float?>>>(emptyList())}
@@ -970,7 +918,7 @@ fun CameraScreen(
     var closestObject by remember { mutableStateOf("") }
     var lastAlertTime by remember { mutableLongStateOf(0L) }
 
-    // 1. Get the vibrator service (standard way for API 26-30)
+    // Get the vibrator service
     val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
         vibratorManager.defaultVibrator
@@ -979,12 +927,13 @@ fun CameraScreen(
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
 
+    //    Create Vibration
     val effect = VibrationEffect.createOneShot(1000, VibrationEffect.DEFAULT_AMPLITUDE)
     val detector = remember(context) {
         ObjectDetector(context, interval, maxResults)
     }
 
-    //    settings updates
+    //  Settings updates
     LaunchedEffect(maxResults) {
         detector.updateMaxResults(maxResults)
     }
@@ -996,7 +945,7 @@ fun CameraScreen(
             .filter { it.second != null }
             .minByOrNull { it.second!! }
 
-        if (closest != null && closest.second!! < 0.3f) {
+        if (closest != null && closest.second!! < 0.2f) {
             closestObject = closest.first.categories.firstOrNull()?.label ?: "Object"
             closestObjectDistance = closest.second!!
             if (now - lastAlertTime > interval) {
@@ -1035,7 +984,7 @@ fun CameraScreen(
             val announcement = if (detectedObjectsDistances.isEmpty()) {
                 "No objects detected."
             } else if (showDialog) {
-                "WARNING: YOU ARE TOO CLOSE TO ${closestObject}, DISTANCE ${closestObjectDistance}"
+                "WARNING: YOU ARE TOO CLOSE TO ${closestObject}, DISTANCE $closestObjectDistance"
             } else {
                 detectedObjectsDistances
                     .take(maxResults)
@@ -1145,7 +1094,7 @@ fun CameraScreen(
                 Surface(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 100.dp) // Below your back button
+                        .padding(top = 100.dp)
                         .fillMaxWidth(0.85f),
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
